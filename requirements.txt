@@ -1,6 +1,5 @@
 numpy
 pandas
-scikit-learn
 joblib
 yfinance
 requests
@@ -9,3 +8,4 @@ streamlit
 colorama
 rich
 matplotlib
+scikit-learn==1.7.2
