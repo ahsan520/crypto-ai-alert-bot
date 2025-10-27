@@ -1,11 +1,18 @@
-numpy
-pandas
-joblib
-yfinance
-requests
-python-telegram-bot
-streamlit
-colorama
-rich
-matplotlib
+# --- Core scientific stack ---
+numpy==2.1.2
+pandas==2.2.3
 scikit-learn==1.7.2
+joblib==1.4.2
+
+# --- Market data & networking ---
+yfinance==0.2.44
+requests==2.32.3
+
+# --- Telegram / Notification ---
+python-telegram-bot==21.7
+
+# --- UI / Visualization / CLI ---
+streamlit==1.40.1
+colorama==0.4.6
+rich==13.9.3
+matplotlib==3.9.2
