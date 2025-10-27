@@ -1,8 +1,14 @@
-name: Crypto AI Hybrid v13 - Train & Alert
+name: Crypto AI Hybrid v13.4 - Train & Alert
 
 on:
   schedule:
     - cron: '*/30 * * * *'  # Every 30 minutes
+  push:
+    paths:
+      - 'train_ai_model.py'
+      - 'spike_predictor.py'
+      - 'crypto_ai_alert_v10.py'
+      - 'requirements.txt'
   workflow_dispatch:
 
 jobs:
@@ -10,52 +16,72 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: 🧩 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: ⚡ Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: ⚙️ Install dependencies
         run: |
+          echo "[RUN] Installing dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip check
+          echo "[DONE] Dependencies installed."
 
-      - name: Apply yfinance symbol fix
+      - name: 🧠 Apply yfinance Binance→Yahoo symbol fix
         run: |
           echo "Patching train_ai_model.py for Binance → Yahoo symbol conversion..."
           sed -i "s/yf.download(symbol/yf.download(symbol.replace('USDT','-USD')/" train_ai_model.py
 
-      - name: Train AI Models
+      - name: 🏋️ Train AI Models
         run: |
           echo "[RUN] Starting model training..."
           python train_ai_model.py
+          echo "[DONE] Model training complete."
 
-      - name: Run Spike Predictor
+      - name: 🚀 Run Spike Predictor
         run: |
           echo "[RUN] Running spike prediction engine..."
           python spike_predictor.py
+          echo "[DONE] Spike predictor completed."
 
-      - name: Run Alert Logic
+      - name: 🔔 Run Alert Logic
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
           echo "[RUN] Executing crypto alert logic..."
           python crypto_ai_alert_v10.py
+          echo "[DONE] Alert logic executed."
 
-      - name: Upload Trained Models
+      - name: 📦 Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      - name: Upload Telemetry Logs
+      - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: telemetry_logs/
 
-      - name: Cleanup Old Telemetry Logs
+      - name: 🧹 Cleanup Old Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry..."
           python telemetry_cleanup.py
+          echo "[DONE] Cleanup complete."
