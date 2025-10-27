@@ -1,0 +1,15 @@
+{
+  "symbol": "BTCUSDT",
+  "timestamp_utc": "2025-10-27T20:47:39.464762Z",
+  "hybrid_ai_signal": "buy",
+  "spike_forecast": "Likely spike",
+  "final_action": "strong_buy",
+  "confidence": 0.65,
+  "reason": {
+    "summary": "Placeholder reason",
+    "details": {
+      "rsi": 32,
+      "macd": 0.003
+    }
+  }
+}

@@ -1,0 +1,11 @@
+numpy
+pandas
+scikit-learn
+joblib
+yfinance
+requests
+python-telegram-bot
+streamlit
+colorama
+rich
+matplotlib

@@ -1,0 +1,15 @@
+{
+  "symbol": "XRPUSDT",
+  "timestamp_utc": "2025-10-27T22:47:39.465101Z",
+  "hybrid_ai_signal": "buy",
+  "spike_forecast": "Likely spike",
+  "final_action": "strong_buy",
+  "confidence": 0.75,
+  "reason": {
+    "summary": "Placeholder reason",
+    "details": {
+      "rsi": 30,
+      "macd": 0.001
+    }
+  }
+}
