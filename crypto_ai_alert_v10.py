@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-crypto_ai_alert_v10.py - Production alert runner
-
-Responsibilities:
-- Load hybrid models (Logistic + RandomForest) saved by train_ai_model.py
-- Load spike predictor packs saved by spike_predictor.py
-- Fetch latest market data (yfinance primary, cache fallback)
-- Build features to match trainer's FEATURES
-- Compute hybrid probabilities, spike probs, merge decisions (config-controlled)
-- Send Telegram alerts ONLY for Buy/Sell (strong variants included)
-- Email fallback if Telegram fails (config.email_alert_fallback)
-- Write telemetry JSON to telemetry_logs/
+crypto_ai_alert_v10.1.py - Production alert runner (patched)
+Fixes:
+- Compatible with sklearn >=1.7.2 unpickle
+- Silences yfinance FutureWarnings
+- Adds .iloc[0] fix for single-row candle values
+- Cleans feature pipeline for stability
 """
 
 import os
@@ -25,14 +20,17 @@ import requests
 import smtplib
 import ssl
 from email.message import EmailMessage
+import warnings
 
-# 3rd-party
+# silence warnings from sklearn/yfinance
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 try:
     import yfinance as yf
 except Exception:
     yf = None
 
-# ---------- Config & paths ----------
+# ---------- Config ----------
 HERE = os.path.dirname(__file__)
 CFG_PATH = os.path.join(HERE, "config.json")
 if not os.path.exists(CFG_PATH):
@@ -49,16 +47,15 @@ os.makedirs(TELEMETRY_DIR, exist_ok=True)
 MODEL_VERSION = cfg.get("model_version", "v10_hybrid")
 USE_SPIKE = cfg.get("use_spike_predictor_in_alerts", True)
 SPIKE_THRESHOLD = float(cfg.get("spike_confidence_threshold", 0.6))
-ALERT_THRESH = cfg.get("alert_probability_thresholds", {"buy":0.7,"sell":0.3})
+ALERT_THRESH = cfg.get("alert_probability_thresholds", {"buy": 0.7, "sell": 0.3})
 
-# features must match trainer FEATURES
 FEATURES = [
     'rsi','rsi_diff','slope','ema_ratio','macd','macd_signal',
     'atr_ratio','body_ratio','upper_wick_ratio','lower_wick_ratio',
     'vol_ratio','vol_change'
 ]
 
-# secrets from env (GitHub Actions will inject them)
+# Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or cfg.get("telegram_token")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or cfg.get("telegram_chat_id")
 EMAIL_USERNAME = os.getenv("EMAIL_USERNAME") or cfg.get("email_username")
@@ -67,11 +64,10 @@ EMAIL_SMTP = cfg.get("email_smtp_server", "smtp.gmail.com")
 EMAIL_PORT = int(cfg.get("email_smtp_port", 465))
 EMAIL_FALLBACK = cfg.get("email_alert_fallback", True)
 
-# symbol mapping to yfinance
 DEFAULT_MAPPING = {"BTCUSDT":"BTC-USD","XRPUSDT":"XRP-USD","GALAUSDT":"GALA-USD"}
 MAPPING = cfg.get("symbol_mapping", DEFAULT_MAPPING)
 
-# util functions
+# ---------- Helpers ----------
 def now_utc_iso():
     return datetime.utcnow().isoformat() + "Z"
 
@@ -96,66 +92,59 @@ def load_spike_pack(symbol):
         return None
 
 def fetch_latest_candle(symbol):
-    """
-    Fetch latest 1h candle via yfinance. Returns pandas Series with open,high,low,close,volume.
-    If yfinance not available or fails, try to load last row from cached CSV.
-    """
     yf_sym = MAPPING.get(symbol)
-    if yf is None:
-        print("[WARN] yfinance not available; fallback to cache")
-    try:
-        if yf is not None:
-            df = yf.download(yf_sym, period="2d", interval="1h", progress=False)
+    if yf is not None:
+        try:
+            df = yf.download(yf_sym, period="2d", interval="1h", progress=False, auto_adjust=True)
             if df is not None and not df.empty:
-                last = df.reset_index().iloc[-1]
+                last = df.tail(1)
                 return {
-                    "timestamp": pd.to_datetime(last["Datetime"]) if "Datetime" in last else last["Datetime"],
-                    "open": float(last["Open"]), "high": float(last["High"]),
-                    "low": float(last["Low"]), "close": float(last["Close"]), "volume": float(last["Volume"])
+                    "timestamp": last.index[-1].to_pydatetime(),
+                    "open": float(last["Open"].iloc[0]),
+                    "high": float(last["High"].iloc[0]),
+                    "low": float(last["Low"].iloc[0]),
+                    "close": float(last["Close"].iloc[0]),
+                    "volume": float(last["Volume"].iloc[0]),
                 }
-    except Exception as e:
-        print(f"[WARN] yfinance latest candle failed for {symbol}: {e}")
-
+        except Exception as e:
+            print(f"[WARN] yfinance failed for {symbol}: {e}")
     # fallback to cache
     cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
     if os.path.exists(cache_path):
         try:
             df = pd.read_csv(cache_path, parse_dates=["timestamp"])
             last = df.iloc[-1]
-            return {"timestamp": last["timestamp"], "open": last["open"], "high": last["high"],
-                    "low": last["low"], "close": last["close"], "volume": last["volume"]}
+            return {
+                "timestamp": last["timestamp"],
+                "open": last["open"],
+                "high": last["high"],
+                "low": last["low"],
+                "close": last["close"],
+                "volume": last["volume"],
+            }
         except Exception as e:
-            print(f"[WARN] Failed to read cache for latest candle {symbol}: {e}")
+            print(f"[WARN] Cache read failed for {symbol}: {e}")
     return None
 
-# feature builders (lightweight - consistent with trainer)
 def ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
 def compute_features_from_df(df):
-    """
-    Accepts a DataFrame with columns timestamp, open, high, low, close, volume
-    Returns df with FEATURES present (may be multiple rows). For alert, we only use last row.
-    """
     df = df.copy()
-    df['close'] = pd.to_numeric(df['close'], errors='coerce')
-    df['open'] = pd.to_numeric(df['open'], errors='coerce')
-    df['high'] = pd.to_numeric(df['high'], errors='coerce')
-    df['low'] = pd.to_numeric(df['low'], errors='coerce')
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-
-    # minimal features to mirror trainer behavior
-    df['rsi'] = df['close'].diff().ewm(alpha=1/14, adjust=False).mean().fillna(50)  # simplified
-    df['rsi_diff'] = df['rsi'] - 50.0
-    df['slope'] = df['close'].rolling(12).apply(lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] if len(x)>1 else 0.0).fillna(0)
+    df[['open','high','low','close','volume']] = df[['open','high','low','close','volume']].apply(pd.to_numeric, errors='coerce')
+    df['rsi'] = df['close'].diff().ewm(alpha=1/14, adjust=False).mean().fillna(50)
+    df['rsi_diff'] = df['rsi'] - 50
+    df['slope'] = df['close'].rolling(12).apply(lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] if len(x)>1 else 0).fillna(0)
     df['ema20'] = ema(df['close'], 20)
-    df['ema_ratio'] = (df['close'] / df['ema20']) - 1.0
-    ema_fast = ema(df['close'], 12)
-    ema_slow = ema(df['close'], 26)
+    df['ema_ratio'] = (df['close'] / df['ema20']) - 1
+    ema_fast, ema_slow = ema(df['close'], 12), ema(df['close'], 26)
     df['macd'] = ema_fast - ema_slow
     df['macd_signal'] = ema(df['macd'], 9)
-    # ATR simplified
-    df['tr'] = pd.concat([df['high']-df['low'], (df['high']-df['close'].shift(1)).abs(), (df['low']-df['close'].shift(1)).abs()], axis=1).max(axis=1)
+    df['tr'] = pd.concat([
+        df['high']-df['low'],
+        (df['high']-df['close'].shift(1)).abs(),
+        (df['low']-df['close'].shift(1)).abs()
+    ], axis=1).max(axis=1)
     df['atr'] = df['tr'].rolling(14).mean().fillna(0)
     df['atr_ratio'] = df['atr'] / df['close'].replace(0, np.nan)
     df['body'] = (df['close'] - df['open']).abs()
@@ -170,54 +159,37 @@ def compute_features_from_df(df):
     df = df.replace([np.inf, -np.inf], np.nan).dropna()
     return df
 
-# prediction helpers
 def ensemble_prob_from_pack(model_pack, X_row):
-    """
-    model_pack contains scaler, logistic, random_forest
-    X_row: 2D array shape (1, n_features)
-    returns hybrid_prob (float)
-    """
     try:
         scaler = model_pack.get("scaler")
-        if scaler is not None:
+        if scaler:
             Xs = scaler.transform(X_row)
         else:
             Xs = X_row
-        log = model_pack.get("logistic")
-        rf = model_pack.get("random_forest")
-        p_log = log.predict_proba(Xs)[:,1] if hasattr(log, "predict_proba") else log.predict(Xs)
-        p_rf = rf.predict_proba(Xs)[:,1] if hasattr(rf, "predict_proba") else rf.predict(Xs)
-        hybrid = 0.5 * np.array(p_log) + 0.5 * np.array(p_rf)
-        return float(hybrid[0])
+        log, rf = model_pack.get("logistic"), model_pack.get("random_forest")
+        p_log = log.predict_proba(Xs)[:,1] if hasattr(log,"predict_proba") else log.predict(Xs)
+        p_rf = rf.predict_proba(Xs)[:,1] if hasattr(rf,"predict_proba") else rf.predict(Xs)
+        return float(0.5 * (p_log[0] + p_rf[0]))
     except Exception as e:
         print(f"[WARN] ensemble prob failed: {e}")
         return 0.0
 
 def spike_probs_from_pack(spike_pack, X_row_spike):
-    """
-    spike_pack expected to have 'spike', 'dip' RandomForest models.
-    X_row_spike is 2D array
-    returns spike_prob, dip_prob
-    """
-    spike_prob = 0.0
-    dip_prob = 0.0
+    spike_prob, dip_prob = 0.0, 0.0
     try:
-        if spike_pack is None:
-            return spike_prob, dip_prob
-        sp = spike_pack.get("spike")
-        dp = spike_pack.get("dip")
+        if not spike_pack: return spike_prob, dip_prob
+        sp, dp = spike_pack.get("spike"), spike_pack.get("dip")
         if sp is not None:
-            spike_prob = float(sp.predict_proba(X_row_spike)[:,1][0]) if hasattr(sp, "predict_proba") else float(sp.predict(X_row_spike)[0])
+            spike_prob = float(sp.predict_proba(X_row_spike)[:,1][0])
         if dp is not None:
-            dip_prob = float(dp.predict_proba(X_row_spike)[:,1][0]) if hasattr(dp, "predict_proba") else float(dp.predict(X_row_spike)[0])
+            dip_prob = float(dp.predict_proba(X_row_spike)[:,1][0])
     except Exception as e:
         print(f"[WARN] spike prob eval failed: {e}")
     return spike_prob, dip_prob
 
-# send telegram
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        raise RuntimeError("Telegram credentials not configured")
+        raise RuntimeError("Telegram credentials missing")
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
@@ -227,7 +199,6 @@ def send_telegram(text):
         print(f"[WARN] Telegram send failed: {e}")
         return False, str(e)
 
-# email fallback
 def send_email(subject, body, to_addr=None):
     if not EMAIL_FALLBACK:
         return False, "email fallback disabled"
@@ -236,64 +207,33 @@ def send_email(subject, body, to_addr=None):
         return False, "email credentials missing"
     try:
         msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_USERNAME
-        msg["To"] = to_addr
+        msg["Subject"], msg["From"], msg["To"] = subject, EMAIL_USERNAME, to_addr
         msg.set_content(body)
         context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(EMAIL_SMTP, EMAIL_PORT, context=context) as server:
-            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
-            server.send_message(msg)
+        with smtplib.SMTP_SSL(EMAIL_SMTP, EMAIL_PORT, context=context) as s:
+            s.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+            s.send_message(msg)
         return True, "sent"
     except Exception as e:
         return False, str(e)
 
-def build_reason_text(ai_prob, spike_prob, dip_prob, ai_signal, spike_forecast):
-    # Medium-level reason for console (adaptive)
-    parts = []
-    parts.append(f"Hybrid AI prob={ai_prob:.2f}")
-    if spike_forecast:
-        parts.append(f"Spike forecast={spike_forecast}")
-    if spike_prob is not None:
-        parts.append(f"spike_conf={spike_prob:.2f}")
-        parts.append(f"dip_conf={dip_prob:.2f}")
-    return " | ".join(parts)
-
 def decide_final_action(ai_prob, buy_thr, sell_thr, ai_signal, spike_forecast, spike_conf):
-    """
-    Merge hybrid AI and spike predictor:
-    - If use_spike_predictor_in_alerts True -> amplify or suppress
-    Returns final_action and reason short tag
-    """
     final = "hold"
-    reason_short = ""
     if ai_signal == "buy":
-        if USE_SPIKE:
-            if spike_forecast == "Likely spike" and spike_conf >= SPIKE_THRESHOLD:
-                final = "strong_buy"; reason_short = "ai+spike_confirm"
-            elif spike_forecast == "Likely dip" and spike_conf >= SPIKE_THRESHOLD:
-                final = "hold"; reason_short = "ai_buy_but_spike_dip"
-            else:
-                final = "buy"; reason_short = "ai_only"
-        else:
-            final = "buy"; reason_short = "ai_only"
-    elif ai_signal == "sell":
-        if USE_SPIKE:
-            if spike_forecast == "Likely dip" and spike_conf >= SPIKE_THRESHOLD:
-                final = "strong_sell"; reason_short = "ai+spike_confirm"
-            elif spike_forecast == "Likely spike" and spike_conf >= SPIKE_THRESHOLD:
-                final = "hold"; reason_short = "ai_sell_but_spike_up"
-            else:
-                final = "sell"; reason_short = "ai_only"
-        else:
-            final = "sell"; reason_short = "ai_only"
-    else:
-        # hold/watch logic if spike signals are very strong consider 'watch' (no alert)
-        if USE_SPIKE and (spike_conf >= SPIKE_THRESHOLD):
-            final = "watch"; reason_short = "spike_only"
-        else:
-            final = "hold"; reason_short = "no_signal"
-    return final, reason_short
+        if USE_SPIKE and spike_forecast == "Likely spike" and spike_conf >= SPIKE_THRESHOLD:
+            return "strong_buy", "ai+spike_confirm"
+        elif USE_SPIKE and spike_forecast == "Likely dip" and spike_conf >= SPIKE_THRESHOLD:
+            return "hold", "ai_buy_but_spike_dip"
+        return "buy", "ai_only"
+    if ai_signal == "sell":
+        if USE_SPIKE and spike_forecast == "Likely dip" and spike_conf >= SPIKE_THRESHOLD:
+            return "strong_sell", "ai+spike_confirm"
+        elif USE_SPIKE and spike_forecast == "Likely spike" and spike_conf >= SPIKE_THRESHOLD:
+            return "hold", "ai_sell_but_spike_up"
+        return "sell", "ai_only"
+    if USE_SPIKE and spike_conf >= SPIKE_THRESHOLD:
+        return "watch", "spike_only"
+    return "hold", "no_signal"
 
 def run_for_symbol(symbol):
     ts = now_utc_iso()
@@ -301,28 +241,21 @@ def run_for_symbol(symbol):
     spike_pack = load_spike_pack(symbol)
     latest = fetch_latest_candle(symbol)
     if latest is None:
-        print(f"[WARN] No latest candle for {symbol}; skipping.")
+        print(f"[WARN] No latest candle for {symbol}")
         return None
 
-    # Build a minimal DataFrame using last 48h from cache if available, else replicate using latest only
     cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
-    df = None
     if os.path.exists(cache_path):
         try:
             df = pd.read_csv(cache_path, parse_dates=["timestamp"])
         except Exception:
             df = None
+    else:
+        df = None
+
     if df is None:
-        # create a tiny rolling df with repeated latest candle to allow feature calc (not ideal but safe)
         df = pd.DataFrame([latest]*50)
         df['timestamp'] = pd.date_range(end=pd.Timestamp.utcnow(), periods=len(df), freq='H')
-
-    # append latest if timestamp newer than last
-    try:
-        if pd.to_datetime(df['timestamp'].iloc[-1]) < pd.to_datetime(latest['timestamp']):
-            df = df.append(latest, ignore_index=True)
-    except Exception:
-        pass
 
     df_feat = compute_features_from_df(df)
     if df_feat.empty:
@@ -331,44 +264,26 @@ def run_for_symbol(symbol):
 
     last_row = df_feat.iloc[-1]
     X = np.array([last_row[FEATURES].values])
-    # hybrid AI probability
-    ai_prob = 0.0
-    ai_signal = "hold"
+    ai_prob, ai_signal = 0.0, "hold"
     if model_pack:
         ai_prob = ensemble_prob_from_pack(model_pack, X)
-        if ai_prob >= ALERT_THRESH.get("buy", 0.7):
+        if ai_prob >= ALERT_THRESH.get("buy",0.7):
             ai_signal = "buy"
-        elif (1.0 - ai_prob) >= ALERT_THRESH.get("sell", 0.7):
+        elif (1-ai_prob) >= ALERT_THRESH.get("sell",0.3):
             ai_signal = "sell"
-        else:
-            ai_signal = "hold"
     else:
-        print(f"[WARN] Model pack missing for {symbol}")
+        print(f"[WARN] Model missing for {symbol}")
 
-    # spike features: simple X_spike (can reuse subset)
-    X_spike = np.array([[ last_row['close'] - last_row['open'],
-                          last_row['vol_change'],
-                          last_row['rsi'],
-                          last_row['macd'] ]])
-    spike_prob, dip_prob = 0.0, 0.0
-    spike_forecast = None
-    spike_conf = 0.0
-    if spike_pack:
-        spike_prob, dip_prob = spike_probs_from_pack(spike_pack, X_spike)
-        if spike_prob >= SPIKE_THRESHOLD and spike_prob > dip_prob:
-            spike_forecast = "Likely spike"
-            spike_conf = spike_prob
-        elif dip_prob >= SPIKE_THRESHOLD and dip_prob > spike_prob:
-            spike_forecast = "Likely dip"
-            spike_conf = dip_prob
-        else:
-            spike_forecast = "Stable"
-            spike_conf = max(spike_prob, dip_prob)
-    # Merge into final action
-    final_action, reason_short = decide_final_action(ai_prob, ALERT_THRESH.get("buy",0.7), ALERT_THRESH.get("sell",0.3), ai_signal, spike_forecast, spike_conf)
+    X_spike = np.array([[last_row['close']-last_row['open'], last_row['vol_change'], last_row['rsi'], last_row['macd']]])
+    spike_prob, dip_prob = spike_probs_from_pack(spike_pack, X_spike) if spike_pack else (0,0)
+    spike_forecast, spike_conf = "Stable", max(spike_prob, dip_prob)
+    if spike_prob >= SPIKE_THRESHOLD and spike_prob > dip_prob:
+        spike_forecast = "Likely spike"
+    elif dip_prob >= SPIKE_THRESHOLD and dip_prob > spike_prob:
+        spike_forecast = "Likely dip"
 
-    # Build human-friendly messages
-    console_reason = build_reason_text(ai_prob, spike_prob, dip_prob, ai_signal, spike_forecast)
+    final_action, reason_short = decide_final_action(ai_prob, ALERT_THRESH["buy"], ALERT_THRESH["sell"], ai_signal, spike_forecast, spike_conf)
+
     telemetry = {
         "symbol": symbol,
         "timestamp_utc": ts,
@@ -378,59 +293,33 @@ def run_for_symbol(symbol):
         "spike_confidence": spike_conf,
         "final_action": final_action,
         "reason_short": reason_short,
-        "reason": {
-            "summary": f"Hybrid AI={ai_signal} ({ai_prob:.2f}), spike={spike_forecast} ({spike_conf:.2f})",
-            "details": {
-                "ai_prob": ai_prob,
-                "spike_prob": spike_prob,
-                "dip_prob": dip_prob,
-                "features": {f: float(last_row[f]) for f in FEATURES if f in last_row.index}
-            }
-        },
         "price": float(last_row['close'])
     }
 
-    # Write telemetry JSON
     fn = os.path.join(TELEMETRY_DIR, f"{symbol}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
-    try:
-        with open(fn, "w") as f:
-            json.dump(telemetry, f, indent=2)
-    except Exception as e:
-        print(f"[WARN] Failed to write telemetry: {e}")
+    with open(fn, "w") as f:
+        json.dump(telemetry, f, indent=2)
 
-    # Send Telegram only for buy/sell strong variants
-    send_alert = final_action in ("buy", "strong_buy", "sell", "strong_sell")
-    if send_alert and cfg.get("telemetry", {}).get("enable_telegram_alerts", True):
-        short = f"🔔 {final_action.upper()} signal for {symbol}\nPrice: {telemetry['price']}\nProb: {ai_prob:.2f}\nSpike: {spike_forecast} ({spike_conf:.2f})\nReason: {telemetry['reason']['summary']}\nTime: {telemetry['timestamp_utc']}"
-        ok, resp = False, None
-        try:
-            ok, resp = send_telegram(short)
-        except Exception as e:
-            ok, resp = False, str(e)
-        # email fallback
-        if not ok and EMAIL_FALLBACK:
+    if final_action in ("buy","strong_buy","sell","strong_sell"):
+        text = f"🔔 {final_action.upper()} {symbol}\nPrice: {telemetry['price']}\nAI={ai_prob:.2f}\nSpike={spike_forecast} ({spike_conf:.2f})\nTime: {ts}"
+        ok, resp = send_telegram(text)
+        if not ok:
             subj = f"[ALERT] {final_action.upper()} {symbol}"
-            body = short
-            ok2, resp2 = send_email(subj, body)
-            print(f"[INFO] Email fallback sent? {ok2} resp={resp2}")
-        print(f"[INFO] Telegram sent? {ok} resp={str(resp)[:200]}")
+            send_email(subj, text)
     else:
-        print(f"[INFO] No alert to send for {symbol} (final_action={final_action})")
+        print(f"[INFO] {symbol}: No actionable signal")
 
-    # Always return telemetry for potential aggregation
     return telemetry
 
 def main():
-    all_telemetry = []
+    all_t = []
     for s in SYMBOLS:
         try:
             t = run_for_symbol(s)
-            if t:
-                all_telemetry.append(t)
+            if t: all_t.append(t)
         except Exception as e:
-            print(f"[ERROR] Exception in run_for_symbol {s}: {e}\n{traceback.format_exc()}")
-    # Optionally: upload or aggregate - GitHub Actions will collect telemetry_logs artifact
-    print(f"[DONE] Run complete at {now_utc_iso()} - {len(all_telemetry)} symbols processed")
+            print(f"[ERROR] {s}: {e}\n{traceback.format_exc()}")
+    print(f"[DONE] Run complete at {now_utc_iso()} - {len(all_t)} symbols processed")
 
 if __name__ == "__main__":
     main()
