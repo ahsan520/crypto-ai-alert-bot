@@ -1,0 +1,39 @@
+{
+  "symbols": [
+    "BTCUSDT",
+    "XRPUSDT",
+    "GALAUSDT"
+  ],
+  "lookback_days": 30,
+  "interval": "1h",
+  "telegram_token": "PASTE_YOUR_TOKEN_OR_USE_ENV",
+  "telegram_chat_id": "PASTE_CHAT_ID_OR_USE_ENV",
+  "alert_probability_thresholds": {
+    "buy": 0.7,
+    "sell": 0.3
+  },
+  "email_alert_fallback": true,
+  "email_smtp_server": "smtp.gmail.com",
+  "email_smtp_port": 465,
+  "email_username": "your.email@gmail.com",
+  "email_password": "your_app_password",
+  "model_dir": "models",
+  "train_days": 30,
+  "retrain_time_utc": "00:00",
+  "features": [
+    "rsi",
+    "rsi_diff",
+    "slope",
+    "ema_ratio",
+    "macd",
+    "macd_signal",
+    "atr_ratio",
+    "body_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "vol_ratio",
+    "vol_change"
+  ],
+  "sample_hours_per_symbol": 920,
+  "model_version": "v4_hybrid"
+}
