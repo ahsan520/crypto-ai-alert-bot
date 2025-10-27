@@ -1,134 +1,132 @@
-#!/usr/bin/env python3
-"""
-train_ai_model_v13.1.py
-------------------------------------
-Crypto AI Model Training Script
-• Fetches crypto data (BTC, XRP, GALA) via Yahoo Finance
-• Cleans and trains lightweight ML models
-• Saves model, scaler, and summary metrics
-• Compatible with GitHub Actions workflow
-"""
-
 import os
 import json
+import time
 import joblib
-import yfinance as yf
-import pandas as pd
+import requests
 import numpy as np
+import pandas as pd
+import yfinance as yf
 from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+from colorama import Fore, Style
 
-# === CONFIGURATION ===
-CRYPTO_SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
-LOOKBACK_DAYS = 90
+# === CONFIG ===
+LOOKBACK_DAYS = 60
 INTERVAL = "1h"
-DATA_DIR = "data"
+SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
+
 MODEL_DIR = "models"
-SUMMARY_DIR = "training_summary"
-
-os.makedirs(DATA_DIR, exist_ok=True)
+TELEMETRY_DIR = "training_summary"
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs(SUMMARY_DIR, exist_ok=True)
+os.makedirs(TELEMETRY_DIR, exist_ok=True)
 
-print("[RUN] Starting model training...")
+def log(msg, level="INFO"):
+    """Consistent timestamped logging"""
+    ts = datetime.utcnow().isoformat()
+    print(f"[{ts}] [{level}] {msg}")
 
-# === FETCH FUNCTION ===
-def fetch_data(symbol):
+# === FETCHING LAYERS ===
+
+def fetch_binance(symbol, interval=INTERVAL, limit=1000):
+    """Fetch OHLC data from Binance API"""
     try:
-        # Ensure symbol is a string
-        if isinstance(symbol, (list, tuple)):
-            symbol = symbol[0]
-
-        yf_symbol = symbol
-        # Yahoo Finance uses -USD for crypto tickers
-        if yf_symbol.endswith("USDT"):
-            yf_symbol = yf_symbol.replace("USDT", "-USD")
-        elif not yf_symbol.endswith("-USD"):
-            yf_symbol = yf_symbol + "-USD"
-
-        print(f"[{datetime.utcnow().isoformat()}] [FETCH] Downloading {yf_symbol} from Yahoo Finance...")
-
-        df = yf.download(
-            yf_symbol,
-            period=f"{LOOKBACK_DAYS}d",
-            interval=INTERVAL,
-            progress=False,
-            auto_adjust=False  # explicitly prevent warning
-        )
-
-        if df is None or df.empty:
-            raise ValueError(f"No data fetched for {yf_symbol}")
-
-        df.dropna(inplace=True)
-        df.reset_index(inplace=True)
-        df.to_csv(os.path.join(DATA_DIR, f"{symbol}.csv"), index=False)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if not isinstance(data, list):
+            raise ValueError(f"Invalid response: {data}")
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "_1", "_2", "_3", "_4", "_5", "_6"
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df.set_index("timestamp", inplace=True)
+        df = df[["open", "high", "low", "close", "volume"]].astype(float)
         return df
-
     except Exception as e:
-        print(f"[{datetime.utcnow().isoformat()}] [ERROR] Could not fetch data for {symbol}: {e}")
+        log(f"Binance fetch failed for {symbol}: {e}", "ERROR")
         return pd.DataFrame()
 
-# === TRAIN FUNCTION ===
+def safe_download_yahoo(symbol, period="60d", interval="1h", retries=3, delay=5):
+    """Yahoo Finance fallback with retry"""
+    for attempt in range(retries):
+        try:
+            df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
+            if not df.empty:
+                return df
+            else:
+                log(f"Empty Yahoo data for {symbol} (attempt {attempt+1})", "WARN")
+        except Exception as e:
+            log(f"Yahoo fetch failed for {symbol} (attempt {attempt+1}): {e}", "ERROR")
+        time.sleep(delay)
+    return pd.DataFrame()
+
+def get_market_data(symbol):
+    """Unified data fetcher with fallback"""
+    df = fetch_binance(symbol)
+    if df.empty:
+        yf_symbol = symbol.replace("USDT", "-USD")
+        log(f"Falling back to Yahoo for {yf_symbol}", "WARN")
+        df = safe_download_yahoo(yf_symbol)
+    return df
+
+# === MODEL TRAINING ===
+
+def prepare_features(df):
+    """Prepare features for model training"""
+    df["return"] = df["close"].pct_change()
+    df["ma5"] = df["close"].rolling(5).mean()
+    df["ma20"] = df["close"].rolling(20).mean()
+    df["volatility"] = df["close"].rolling(10).std()
+    df = df.dropna()
+    X = df[["open", "high", "low", "close", "volume", "ma5", "ma20", "volatility"]]
+    y = df["close"].shift(-1).dropna()
+    X, y = X.iloc[:-1], y
+    return X, y
+
 def train_model(symbol, df):
+    """Train and save model"""
     try:
-        print(f"[{datetime.utcnow().isoformat()}] [TRAIN] Starting model training for {symbol}...")
-
-        # Prepare features
-        df["Target"] = df["Close"].shift(-1)
-        df.dropna(inplace=True)
-
-        X = df[["Open", "High", "Low", "Volume"]].values
-        y = df["Target"].values
-
+        X, y = prepare_features(df)
+        if len(X) < 50:
+            log(f"Not enough data for {symbol} ({len(X)} rows)", "WARN")
+            return None
         scaler = MinMaxScaler()
         X_scaled = scaler.fit_transform(X)
-
-        model = LinearRegression()
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
         model.fit(X_scaled, y)
-
-        y_pred = model.predict(X_scaled)
-        mae = mean_absolute_error(y, y_pred)
-        mse = mean_squared_error(y, y_pred)
-        rmse = np.sqrt(mse)
-
-        model_path = os.path.join(MODEL_DIR, f"{symbol}_model.pkl")
-        scaler_path = os.path.join(MODEL_DIR, f"{symbol}_scaler.pkl")
-
-        joblib.dump(model, model_path)
-        joblib.dump(scaler, scaler_path)
-
-        print(f"[{datetime.utcnow().isoformat()}] [TRAIN] Model trained successfully for {symbol}")
-        return {"symbol": symbol, "mae": mae, "rmse": rmse}
-
+        joblib.dump({"model": model, "scaler": scaler}, os.path.join(MODEL_DIR, f"{symbol}_model.pkl"))
+        log(f"Model trained successfully for {symbol} ({len(X)} samples)")
+        return True
     except Exception as e:
-        print(f"[{datetime.utcnow().isoformat()}] [ERROR] Training failed for {symbol}: {e}")
-        return {"symbol": symbol, "error": str(e)}
+        log(f"Training failed for {symbol}: {e}", "ERROR")
+        return None
 
-# === MAIN RUN ===
+# === MAIN EXECUTION ===
+
 def main():
-    start_time = datetime.utcnow().isoformat()
-    print(f"[{start_time}] [START] Training run — {start_time}")
+    start_time = datetime.utcnow()
+    log(f"[START] Training run — {start_time}")
+    telemetry = {"start_time": str(start_time), "symbols": {}}
 
-    results = []
-    for symbol in CRYPTO_SYMBOLS:
-        df = fetch_data(symbol)
+    for symbol in SYMBOLS:
+        log(f"[FETCH] Downloading {symbol} data...")
+        df = get_market_data(symbol)
         if df.empty:
+            log(f"[ERROR] No data fetched for {symbol}", "ERROR")
+            telemetry["symbols"][symbol] = {"status": "failed_no_data"}
             continue
-        metrics = train_model(symbol, df)
-        results.append(metrics)
+        status = train_model(symbol, df)
+        telemetry["symbols"][symbol] = {"status": "success" if status else "failed"}
+        time.sleep(2)
 
-    summary_file = os.path.join(SUMMARY_DIR, f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(summary_file, "w") as f:
-        json.dump({
-            "timestamp": datetime.utcnow().isoformat(),
-            "symbols_trained": [r["symbol"] for r in results],
-            "results": results
-        }, f, indent=4)
-
-    print(f"[{datetime.utcnow().isoformat()}] [DONE] Training telemetry saved → {summary_file}")
-
+    telemetry["end_time"] = str(datetime.utcnow())
+    telemetry_path = os.path.join(TELEMETRY_DIR, f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(telemetry_path, "w") as f:
+        json.dump(telemetry, f, indent=2)
+    log(f"[DONE] Training telemetry saved → {telemetry_path}")
+    log("[DONE] Model training complete.")
 
 if __name__ == "__main__":
     main()
