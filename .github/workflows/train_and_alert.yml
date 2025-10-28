@@ -70,31 +70,29 @@ jobs:
           ls -lh data_cache || echo "[WARN] No cache created."
 
       # ---------------------------
-      # 4️⃣ Check model freshness
+      # 4️⃣ Check model freshness (with missing-model detection)
       # ---------------------------
       - name: ⏱ Check model freshness
         id: freshness
         run: |
           echo "[CHECK] Checking if models are older than 2 hours..."
-          needs_training=false
           mkdir -p models
-          found_model=false
-          for model in models/*_model.pkl; do
+          needs_training=false
+
+          for pair in BTCUSDT XRPUSDT GALAUSDT; do
+            model="models/${pair}_model.pkl"
             if [ -f "$model" ]; then
-              found_model=true
               age_seconds=$(( $(date +%s) - $(stat -c %Y "$model") ))
               echo "[INFO] $model age: ${age_seconds}s"
               if [ $age_seconds -gt 7200 ]; then
                 echo "[WARN] $model older than 2 hours — retraining required."
                 needs_training=true
               fi
+            else
+              echo "[WARN] Missing model for $pair — retraining required."
+              needs_training=true
             fi
           done
-
-          if [ "$found_model" = false ]; then
-            echo "[WARN] No model found — training required."
-            needs_training=true
-          fi
 
           echo "needs_training=$needs_training" >> $GITHUB_ENV
           echo "[RESULT] Training needed: $needs_training"
