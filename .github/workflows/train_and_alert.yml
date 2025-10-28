@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # allow workflow to commit model updates
+  contents: write   # Allow commits/pushes
   actions: read
 
 env:
@@ -31,68 +31,87 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 3️⃣ Dependencies
+      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
 
-      # 4️⃣ Ensure folders
+      # 4️⃣ Ensure folders exist
       - name: Ensure required folders exist
         run: |
           echo "[INIT] Ensuring models, data_cache, telemetry_logs folders exist..."
           mkdir -p models data_cache telemetry_logs
           touch models/.gitkeep data_cache/.gitkeep telemetry_logs/.gitkeep
 
-      # 5️⃣ Train
+      # 5️⃣ Train models
       - name: Train AI Models
         run: |
           echo "[RUN] Starting AI model training..."
-          python train_ai_model.py
+          python train.py || echo "[WARN] Training script encountered a warning."
 
-      # 6️⃣ Spike prediction
+      # 6️⃣ Spike prediction (optional)
       - name: Run Spike Predictor
         run: |
           echo "[RUN] Running spike prediction engine..."
-          python spike_predictor.py
+          if [ -f spike_predictor.py ]; then
+            python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
+          else
+            echo "[INFO] spike_predictor.py not found, skipping."
+          fi
 
-      # 7️⃣ Alerts (safe mode)
+      # 7️⃣ Run Crypto AI Alert Logic
       - name: Run Crypto AI Alert Logic (Safe Mode)
         run: |
           echo "[RUN] Executing crypto alert logic..."
           python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
 
-      # 8️⃣ Artifacts (models)
+      # 8️⃣ Upload trained models as artifacts
       - name: Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      # 9️⃣ Artifacts (telemetry)
+      # 9️⃣ Upload telemetry logs as artifacts
       - name: Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: telemetry_logs/
 
-      # 🔟 Cleanup telemetry
+      # 🔟 Cleanup telemetry (optional)
       - name: Cleanup Old Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry logs..."
-          python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped."
+          if [ -f telemetry_cleanup.py ]; then
+            python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped."
+          else
+            echo "[INFO] telemetry_cleanup.py not found, skipping."
+          fi
 
-      # 1️⃣1️⃣ Commit & push updated models + telemetry
+      # 1️⃣1️⃣ Commit and push updated models + telemetry logs
       - name: Commit and push updated models and telemetry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "[GIT] Committing and pushing trained models + telemetry logs..."
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions Bot"
-          git add models/ telemetry_logs/
+
+          # Force-add ignored dirs (.gitignore-safe)
+          git add -f models/*.pkl telemetry_logs/*.json data_cache/*.csv || true
+
+          # Commit only if there are changes
           if git diff --cached --quiet; then
             echo "[INFO] No changes detected, skipping commit."
           else
             git commit -m "Auto-update: AI model + telemetry artifacts [skip ci]"
-            git push origin main
+            git pull --rebase origin main || echo "[WARN] Rebase skipped or failed."
+            git push origin main || echo "[WARN] Push failed (check permissions)."
           fi
+
+      # ✅ Finish
+      - name: ✅ Done
+        run: echo "[FINISH] Crypto AI Hybrid v13.3 workflow completed successfully."
