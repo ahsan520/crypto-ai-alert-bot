@@ -1,32 +1,43 @@
 #!/usr/bin/env python3
-import os, json
-from datetime import datetime, timedelta
+# telemetry_cleanup.py
+# -----------------------------------------------------
+# Clean up old telemetry logs, keeping last 3 per symbol.
+# -----------------------------------------------------
 
-CONFIG_PATH = "config.json"
+import os
+import json
+from datetime import datetime
 
-def load_config():
-    with open(CONFIG_PATH) as f:
-        return json.load(f)
+LOG_DIR = "telemetry_logs"
+KEEP = 3
 
 def cleanup():
-    config = load_config()
-    max_age_days = config.get("max_log_age_days", 30)
-    log_dir = "telemetry_logs"
-    if not os.path.exists(log_dir):
-        print("[INFO] No telemetry_logs directory found.")
+    if not os.path.exists(LOG_DIR):
+        print("[INFO] telemetry_logs folder missing, skipping cleanup.")
         return
 
-    cutoff = datetime.utcnow() - timedelta(days=max_age_days)
-    deleted = 0
-    for file in os.listdir(log_dir):
-        path = os.path.join(log_dir, file)
-        if os.path.isfile(path):
-            mtime = datetime.utcfromtimestamp(os.path.getmtime(path))
-            if mtime < cutoff:
-                os.remove(path)
-                deleted += 1
+    files_by_symbol = {}
+    for f in sorted(os.listdir(LOG_DIR)):
+        if not f.endswith(".json"):
+            continue
+        parts = f.split("_")
+        if len(parts) < 2:
+            continue
+        symbol = parts[0]
+        files_by_symbol.setdefault(symbol, []).append(f)
 
-    print(f"[CLEANUP] Removed {deleted} old telemetry files (>{max_age_days} days).")
+    for sym, files in files_by_symbol.items():
+        if len(files) <= KEEP:
+            continue
+        to_delete = sorted(files)[:-KEEP]
+        for f in to_delete:
+            try:
+                os.remove(os.path.join(LOG_DIR, f))
+                print(f"[CLEAN] Removed old telemetry: {f}")
+            except Exception as e:
+                print(f"[WARN] Could not delete {f}: {e}")
+
+    print(f"[DONE] Telemetry cleanup complete. Kept {KEEP} files per symbol.")
 
 if __name__ == "__main__":
     cleanup()
