@@ -1,10 +1,9 @@
+#!/usr/bin/env python3
 import os
 import json
-import time
 import joblib
 import logging
 import pandas as pd
-import numpy as np
 from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor
 from utils.data_fetcher import get_data  # ✅ unified fetcher import
@@ -32,6 +31,7 @@ logging.basicConfig(
 # TRAINING FUNCTION
 # ==============================
 def train_model(symbol, df):
+    """Train a RandomForest model for one symbol."""
     if df is None or len(df) < 100:
         logging.warning(f"[WARN] Not enough data for {symbol} ({0 if df is None else len(df)} rows)")
         return None
@@ -63,16 +63,32 @@ def main():
 
     for symbol in SYMBOLS:
         logging.info(f"[FETCH] Loading data for {symbol}")
+
         df = get_data(symbol)  # ✅ centralized fetch (CoinGecko → Yahoo → Cache)
-        logging.info(f"[DATA] {symbol} → {len(df)} rows loaded")
+        cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
+
+        if df is None or df.empty:
+            logging.warning(f"[WARN] No valid data retrieved for {symbol}. Skipping.")
+            continue
+
+        if not os.path.exists(cache_file):
+            logging.warning(f"[WARN] Cache file missing for {symbol}: {cache_file}")
+            continue
+
+        logging.info(f"[DATA] {symbol} → {len(df)} rows loaded (cache OK)")
 
         model = train_model(symbol, df)
+
         summary["symbols"][symbol] = {
-            "rows": len(df) if df is not None else 0,
+            "rows": len(df),
             "model_trained": model is not None,
+            "cache_file": cache_file,
+            "model_path": os.path.join(MODEL_DIR, f"{symbol}_model.pkl")
         }
 
-    # Save training summary JSON
+    # ==============================
+    # SAVE TRAINING SUMMARY
+    # ==============================
     summary_path = os.path.join(
         SUMMARY_DIR,
         f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
@@ -82,7 +98,7 @@ def main():
 
     logging.info(f"[DONE] Training summary saved → {summary_path}")
     logging.info(f"[CHECK] Cached files: {os.listdir(CACHE_DIR)}")
-    logging.info("[FINISH] All models processed.")
+    logging.info("[FINISH] All models processed successfully.")
 
 
 if __name__ == "__main__":
