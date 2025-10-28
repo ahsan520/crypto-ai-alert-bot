@@ -1,0 +1,26 @@
+{
+  "timestamp": "2025-10-28 08:26:43.205117",
+  "symbols": {
+    "BTCUSDT": {
+      "rows": 720,
+      "model_trained": true,
+      "source": "Kraken",
+      "cache_file": "/home/runner/work/crypto-ai-alert-bot/crypto-ai-alert-bot/utils/../data_cache/BTCUSDT.csv",
+      "model_path": "models/BTCUSDT_model.pkl"
+    },
+    "XRPUSDT": {
+      "rows": 720,
+      "model_trained": true,
+      "source": "Kraken",
+      "cache_file": "/home/runner/work/crypto-ai-alert-bot/crypto-ai-alert-bot/utils/../data_cache/XRPUSDT.csv",
+      "model_path": "models/XRPUSDT_model.pkl"
+    },
+    "GALAUSDT": {
+      "rows": 721,
+      "model_trained": true,
+      "source": "CoinGecko",
+      "cache_file": "/home/runner/work/crypto-ai-alert-bot/crypto-ai-alert-bot/utils/../data_cache/GALAUSDT.csv",
+      "model_path": "models/GALAUSDT_model.pkl"
+    }
+  }
+}
