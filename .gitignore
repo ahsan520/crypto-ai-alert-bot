@@ -131,8 +131,13 @@ tmp/
 *.tmp
 *.bak
 
+# Allow keeping folder structure
+!telemetry_logs/.gitkeep
+!data_cache/.gitkeep
+!models/.gitkeep
+
 # AI / ML model weights or checkpoints
-!models/
+models/
 checkpoints/
 *.pth
 *.h5
@@ -158,4 +163,3 @@ logs/
 # OS junk
 .DS_Store
 Thumbs.db
-!telemetry_logs/
