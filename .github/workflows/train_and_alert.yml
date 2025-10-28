@@ -98,7 +98,7 @@ jobs:
         if: always()
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          python crypto_ai_alert_v11.py || echo "[WARN] Alert logic exited with non-zero status."
+          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
 
       # 9️⃣ Upload trained models (if rebuilt)
       - name: 📤 Upload Trained Models
