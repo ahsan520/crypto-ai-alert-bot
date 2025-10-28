@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 from utils.data_fetcher import fetch_and_cache
 from spike_predictor import run_spike_predictor
-from model_trainer import train_model_if_needed
+from train_ai_model import train_model_if_needed
 
 MODEL_DIR = "models"
 DATA_DIR = "data_cache"
