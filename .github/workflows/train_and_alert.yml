@@ -1,4 +1,4 @@
-name: "🧠 Crypto AI Hybrid v13.5 - Train & Alert"
+name: "🧠 Crypto AI Hybrid v13.6 - Train & Alert"
 
 on:
   schedule:
@@ -22,6 +22,9 @@ jobs:
       # ---------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,19 +43,28 @@ jobs:
       # ---------------------------
       - name: 🗂 Prepare required folders
         run: |
-          echo "[INIT] Ensuring models, data_cache, telemetry_logs exist..."
+          echo "[INIT] Ensuring all required folders exist..."
           mkdir -p models data_cache telemetry_logs utils training_summary
 
       # ---------------------------
-      # 3️⃣ Run unified data fetcher
+      # 3️⃣ Run unified data fetcher (fixed path)
       # ---------------------------
       - name: 📦 Run Multi-Source Data Fetcher
         run: |
           echo "[RUN] Fetching crypto data using utils/data_fetcher.py..."
-          if [ -f utils/data_fetcher.py ]; then
+          echo "[DEBUG] Working directory: $(pwd)"
+          echo "[DEBUG] Listing files:"
+          ls -R || true
+
+          cd "${GITHUB_WORKSPACE}" || exit 1
+          if [ -f "utils/data_fetcher.py" ]; then
+            echo "[INFO] ✅ Found utils/data_fetcher.py — executing..."
             python utils/data_fetcher.py || echo "[WARN] Data fetch fallback triggered — continuing with cache."
           else
-            echo "[ERROR] utils/data_fetcher.py not found — please verify repository structure."
+            echo "[❌ ERROR] utils/data_fetcher.py not found in $(pwd)"
+            echo "[INFO] Contents of utils/:"
+            ls -al utils || true
+            exit 1
           fi
 
       # ---------------------------
@@ -66,7 +78,7 @@ jobs:
           for model in models/*_model.pkl; do
             if [ -f "$model" ]; then
               age_seconds=$(( $(date +%s) - $(stat -c %Y "$model") ))
-              echo "[INFO] $model age: ${age_seconds} seconds"
+              echo "[INFO] $model age: ${age_seconds}s"
               if [ $age_seconds -gt 7200 ]; then
                 echo "[WARN] $model older than 2 hours — retraining required."
                 needs_training=true
@@ -92,7 +104,7 @@ jobs:
         run: echo "[INFO] Models are up-to-date (younger than 2 hours). Skipping training."
 
       # ---------------------------
-      # 6️⃣ Run Spike Predictor (Updated filename)
+      # 6️⃣ Run Spike Predictor (updated)
       # ---------------------------
       - name: ⚡ Run Spike Predictor
         run: |
@@ -100,7 +112,7 @@ jobs:
           if [ -f spike_predictor.py ]; then
             python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
           else
-            echo "[INFO] spike_predictor.py not found, skipping."
+            echo "[INFO] spike_predictor.py not found — skipping."
           fi
 
       # ---------------------------
@@ -156,4 +168,4 @@ jobs:
       # ✅ Finish
       # ---------------------------
       - name: ✅ Done
-        run: echo "[FINISH] Crypto AI Hybrid v13.5 workflow completed successfully."
+        run: echo "[FINISH] Crypto AI Hybrid v13.6 workflow completed successfully."
