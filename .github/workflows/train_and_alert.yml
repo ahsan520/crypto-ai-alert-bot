@@ -32,7 +32,7 @@ jobs:
       - name: Train AI Models
         run: |
           echo "[RUN] Starting model training..."
-          python train_ai_model_v13.3.py
+          python train_ai_model.py
 
       - name: Run Spike Predictor
         run: |
