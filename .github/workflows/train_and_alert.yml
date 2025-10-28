@@ -49,7 +49,7 @@ jobs:
       - name: Train AI Models
         run: |
           echo "[RUN] Starting AI model training..."
-          python train.py || echo "[WARN] Training script encountered a warning."
+          python train_ai_model.py || echo "[WARN] Training script encountered a warning."
 
       # 6️⃣ Spike prediction (optional)
       - name: Run Spike Predictor
