@@ -132,7 +132,7 @@ tmp/
 *.bak
 
 # AI / ML model weights or checkpoints
-models/
+!models/
 checkpoints/
 *.pth
 *.h5
@@ -158,5 +158,4 @@ logs/
 # OS junk
 .DS_Store
 Thumbs.db
-!models/
 !telemetry_logs/
