@@ -158,3 +158,5 @@ logs/
 # OS junk
 .DS_Store
 Thumbs.db
+!models/
+!telemetry_logs/
