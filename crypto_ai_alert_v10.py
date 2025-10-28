@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # crypto_ai_alert_v11.py
 # -----------------------------------------------------
-# Crypto AI Hybrid v11 — Unified cache + real-time alerts
+# Crypto AI Hybrid v11 — Dynamic model discovery + unified cache
 # -----------------------------------------------------
 import os
 import time
@@ -10,21 +10,18 @@ import joblib
 import requests
 import pandas as pd
 from datetime import datetime
+from pathlib import Path
 from sklearn.ensemble import RandomForestRegressor
 
 # -----------------------------------------------------
 # Configuration
 # -----------------------------------------------------
-DATA_CACHE = "data_cache"
-MODEL_DIR = "models"
-os.makedirs(DATA_CACHE, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+DATA_CACHE = BASE_DIR / "data_cache"
+MODEL_DIR = BASE_DIR / "models"
 
-CONFIG = {
-    "BTCUSDT": {"model": f"{MODEL_DIR}/btc_rf.pkl"},
-    "XRPUSDT": {"model": f"{MODEL_DIR}/xrp_rf.pkl"},
-    "GALAUSDT": {"model": f"{MODEL_DIR}/gala_rf.pkl"},
-}
+DATA_CACHE.mkdir(exist_ok=True)
+MODEL_DIR.mkdir(exist_ok=True)
 
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "true").lower() == "true"
@@ -71,9 +68,9 @@ def fetch_latest_candle(symbol):
 
 def update_cache(symbol, candle):
     """Maintain rolling cache (3 recent candles)."""
-    file_path = os.path.join(DATA_CACHE, f"{symbol}.json")
+    file_path = DATA_CACHE / f"{symbol}.json"
     try:
-        data = json.load(open(file_path)) if os.path.exists(file_path) else []
+        data = json.load(open(file_path)) if file_path.exists() else []
     except Exception:
         data = []
     data.append(candle)
@@ -104,13 +101,32 @@ def compute_features(df):
     return df[["open", "high", "low", "close", "volume"]].values
 
 
+def discover_models():
+    """Dynamically discover all .pkl models in models/."""
+    model_map = {}
+    for model_file in MODEL_DIR.glob("*.pkl"):
+        symbol = (
+            model_file.stem.replace("_rf", "")
+            .replace("_model", "")
+            .upper()
+        )
+        model_map[symbol] = str(model_file)
+    return model_map
+
+
 def run_alert_cycle():
     """Main alert loop."""
     print(f"\n[INFO] Starting alert cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    for symbol, cfg in CONFIG.items():
+    models = discover_models()
+    if not models:
+        print("[WARN] No model files found in models/. Skipping alert cycle.")
+        return
+
+    for symbol, model_path in models.items():
         try:
-            model_path = cfg["model"]
+            print(f"\n[MODEL] Processing {symbol} from {os.path.basename(model_path)}")
+
             if not os.path.exists(model_path):
                 print(f"[WARN] Missing model: {model_path}")
                 continue
@@ -120,8 +136,8 @@ def run_alert_cycle():
                 continue
 
             update_cache(symbol, candle)
-            cache_file = os.path.join(DATA_CACHE, f"{symbol}.json")
-            if not os.path.exists(cache_file):
+            cache_file = DATA_CACHE / f"{symbol}.json"
+            if not cache_file.exists():
                 print(f"[WARN] Cache not found for {symbol}")
                 continue
 
@@ -157,12 +173,12 @@ def run_alert_cycle():
         except Exception as e:
             print(f"[ERROR] {symbol} failed: {e}")
 
-    print("[DONE] Alert cycle complete.\n")
+    print("\n[DONE] Alert cycle complete.\n")
 
 
 # -----------------------------------------------------
 # Main Entry
 # -----------------------------------------------------
 if __name__ == "__main__":
-    print('[RUN] Executing crypto alert logic...')
+    print("[RUN] Executing crypto alert logic...")
     run_alert_cycle()
