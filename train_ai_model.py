@@ -5,7 +5,7 @@ import joblib
 import logging
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor
 import yfinance as yf
 import requests
@@ -22,7 +22,6 @@ SYMBOLS = {
 CACHE_DIR = "data_cache"
 MODEL_DIR = "models"
 SUMMARY_DIR = "training_summary"
-CACHE_EXPIRY_HOURS = 6  # Cache expires after 6 hours
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -30,13 +29,14 @@ os.makedirs(SUMMARY_DIR, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 
+# CoinGecko setup
 USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "true").lower() == "true"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 BASE_URL = "https://api.coingecko.com/api/v3" if USE_COINGECKO_DEMO else "https://pro-api.coingecko.com/api/v3"
 
 
 # ==============================
-# FETCH HELPERS
+# DATA FETCH HELPERS
 # ==============================
 def fetch_from_coingecko(coin_id):
     try:
@@ -48,7 +48,7 @@ def fetch_from_coingecko(coin_id):
         r = requests.get(url, params=params, headers=headers, timeout=10)
         data = r.json()
         if "prices" not in data:
-            raise ValueError(f"Invalid CoinGecko response: {data}")
+            raise ValueError(f"Invalid response: {data}")
         prices = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
         volumes = pd.DataFrame(data["total_volumes"], columns=["timestamp", "volume"])
         merged = pd.merge(prices, volumes, on="timestamp", how="inner")
@@ -72,6 +72,8 @@ def fetch_from_binance(symbol):
         if r.status_code != 200:
             raise ValueError(f"Invalid Binance response: {r.status_code}")
         data = r.json()
+        if not isinstance(data, list):
+            raise ValueError("Invalid Binance response format")
         df = pd.DataFrame(data, columns=[
             "timestamp", "open", "high", "low", "close", "volume",
             "_", "__", "___", "____", "_____", "______"
@@ -103,48 +105,60 @@ def fetch_from_yahoo(symbol):
 
 
 # ==============================
-# CACHE MANAGEMENT
+# CACHE HANDLING
 # ==============================
-def is_cache_valid(cache_path):
-    if not os.path.exists(cache_path):
+def is_cache_valid(path, max_age_hours=6):
+    """Return True if cache file exists and is fresh (< max_age_hours old)."""
+    if not os.path.exists(path):
         return False
-    mtime = datetime.fromtimestamp(os.path.getmtime(cache_path))
-    if datetime.now() - mtime < timedelta(hours=CACHE_EXPIRY_HOURS):
-        return True
-    else:
-        logging.info(f"[CACHE] Expired cache, deleting {cache_path}")
-        os.remove(cache_path)
-        return False
+    age = time.time() - os.path.getmtime(path)
+    return age < max_age_hours * 3600
+
+
+def cleanup_expired_cache(max_age_hours=6):
+    """Delete expired cache files."""
+    for file in os.listdir(CACHE_DIR):
+        full_path = os.path.join(CACHE_DIR, file)
+        if not is_cache_valid(full_path, max_age_hours):
+            os.remove(full_path)
+            logging.info(f"[CLEANUP] Removed expired cache file → {file}")
 
 
 def load_or_fetch(symbol, coin_id):
     cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-    # 1️⃣ Try cache first if valid
+    # 1️⃣ Use cache only if valid *and* has enough data
     if is_cache_valid(cache_path):
-        logging.info(f"[CACHE] Using valid cache for {symbol}")
         df = pd.read_csv(cache_path)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df
+        if len(df) > 100:
+            logging.info(f"[CACHE] Using valid cache for {symbol}")
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            return df
+        else:
+            logging.info(f"[CACHE] Cache too small ({len(df)} rows) → refetching")
 
-    # 2️⃣ Graceful fallback: CoinGecko → Binance → Yahoo → Old cache
-    logging.info(f"[FETCH] Fetching fresh data for {symbol}")
+    # 2️⃣ Graceful fallback: CoinGecko → Binance → Yahoo
+    logging.info(f"[FETCH] Attempting fresh data for {symbol}")
     df = fetch_from_coingecko(coin_id)
     if df.empty:
         df = fetch_from_binance(symbol)
     if df.empty:
         df = fetch_from_yahoo(symbol.replace("USDT", "-USD"))
 
-    # 3️⃣ Use old cache if all sources failed
+    # 3️⃣ If all fetches fail but cache exists → use old cache anyway
     if df.empty and os.path.exists(cache_path):
-        logging.warning(f"[FALLBACK] Using old expired cache for {symbol}")
+        logging.warning(f"[FALLBACK] All fetches failed → using old cache for {symbol}")
         df = pd.read_csv(cache_path)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
 
-    # 4️⃣ Save new cache if we got something
+    # 4️⃣ If data fetched → save/update cache
     if not df.empty:
-        df.to_csv(cache_path, index=False)
-        logging.info(f"[CACHE] Updated cache for {symbol} ({len(df)} rows)")
+        try:
+            df.to_csv(cache_path, index=False)
+            logging.info(f"[CACHE] Updated cache with {len(df)} rows for {symbol}")
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to save cache for {symbol}: {e}")
 
     return df
 
@@ -179,6 +193,8 @@ def train_model(symbol, df):
 # ==============================
 def main():
     logging.info("[START] AI Model Training Sequence")
+    cleanup_expired_cache(max_age_hours=6)
+
     summary = {"timestamp": str(datetime.utcnow()), "symbols": {}}
 
     for symbol, coin_id in SYMBOLS.items():
@@ -191,11 +207,15 @@ def main():
         }
 
     # Save summary JSON
-    summary_path = os.path.join(SUMMARY_DIR, f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+    summary_path = os.path.join(
+        SUMMARY_DIR,
+        f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     logging.info(f"[DONE] Training summary saved → {summary_path}")
+    logging.info(f"[CHECK] Cached files: {os.listdir(CACHE_DIR)}")
     logging.info("[FINISH] All models processed.")
 
 
