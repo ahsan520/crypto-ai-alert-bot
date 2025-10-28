@@ -1,4 +1,4 @@
-name: "🧠 Crypto AI Hybrid v13.7 - Fetch → Train → Alert"
+name: "🧠 Crypto AI Hybrid v13.8 - Fetch → Train → Spike → Alert"
 
 on:
   schedule:
@@ -44,7 +44,7 @@ jobs:
       - name: 🗂 Prepare required folders
         run: |
           echo "[INIT] Ensuring all required folders exist..."
-          mkdir -p models data_cache telemetry_logs utils training_summary
+          mkdir -p models data_cache telemetry_logs utils training_summary models/spike_trend
 
       # ---------------------------
       # 3️⃣ Run Multi-Source Data Fetcher
@@ -115,6 +115,8 @@ jobs:
           else
             echo "[❌ ERROR] spike_predictor.py not found!"
           fi
+          echo "[INFO] Spike packs in models/spike_trend:"
+          ls -lh models/spike_trend || echo "[WARN] No spike packs found."
 
       # ---------------------------
       # 7️⃣ Run Crypto AI Alert Logic (v10)
@@ -136,6 +138,7 @@ jobs:
         with:
           name: trained_models
           path: models/
+          retention-days: 7
 
       # ---------------------------
       # 9️⃣ Upload Telemetry Logs
@@ -145,6 +148,7 @@ jobs:
         with:
           name: telemetry_logs
           path: telemetry_logs/
+          retention-days: 7
 
       # ---------------------------
       # 🔟 Commit and Push Models + Telemetry
@@ -156,7 +160,7 @@ jobs:
           echo "[GIT] Saving models and telemetry logs..."
           git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
-          git add -f models/*.pkl telemetry_logs/*.json data_cache/* training_summary/* || true
+          git add -f models/*.pkl models/spike_trend/*.pkl telemetry_logs/*.json data_cache/* training_summary/* || true
           if git diff --cached --quiet; then
             echo "[INFO] No changes detected, skipping commit."
           else
@@ -169,4 +173,4 @@ jobs:
       # ✅ Finish
       # ---------------------------
       - name: ✅ Done
-        run: echo "[FINISH] Crypto AI Hybrid v13.7 workflow completed successfully."
+        run: echo "[FINISH] Crypto AI Hybrid v13.8 workflow completed successfully."
