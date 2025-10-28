@@ -1,98 +1,53 @@
 #!/usr/bin/env python3
 import os
+import json
+import time
 import logging
+import requests
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
-from pandas_datareader import data as pdr
-from pycoingecko import CoinGeckoAPI
 
 CACHE_DIR = "data_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-cg = CoinGeckoAPI()
-
-
-# =========================================
-# SYMBOL MAPS
-# =========================================
-SYMBOL_MAP = {
-    "BTCUSDT": {
-        "google": "CURRENCY:BTCUSD",
-        "yahoo": "BTC-USD",
-        "coingecko": "bitcoin"
-    },
-    "XRPUSDT": {
-        "google": "CURRENCY:XRPUSD",
-        "yahoo": "XRP-USD",
-        "coingecko": "ripple"
-    },
-    "GALAUSDT": {
-        "google": "CURRENCY:GALAUSD",
-        "yahoo": "GALA-USD",
-        "coingecko": "gala"
-    }
-}
-
-
-# =========================================
-# SAVE CACHE
-# =========================================
-def _save_cache(symbol, df):
-    """Save dataframe to cache as CSV."""
-    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
+# ==============================
+# GOOGLE FINANCE FETCHER
+# ==============================
+def get_google_data(symbol):
+    """
+    Try to fetch historical OHLCV data from Google Finance via Yahoo API proxy.
+    Note: Google Finance doesn’t have an official public API, so we use a lightweight
+    CSV endpoint provided by Google (may occasionally block requests).
+    """
     try:
-        df.to_csv(cache_path, index=False)
-        logging.info(f"[CACHE] Saved → {cache_path}")
-    except Exception as e:
-        logging.error(f"[CACHE ERROR] {symbol}: {e}")
-
-
-# =========================================
-# GOOGLE FINANCE FETCH
-# =========================================
-def fetch_google(symbol):
-    """Fetch from Google Finance via pandas_datareader."""
-    try:
-        mapped = SYMBOL_MAP.get(symbol, {}).get("google", symbol)
-        logging.info(f"[GOOGLE] Fetching {symbol} as {mapped}")
-        end = datetime.utcnow()
-        start = end - timedelta(days=60)
-
-        df = pdr.DataReader(mapped, "google", start, end)
-        df.reset_index(inplace=True)
-        df.rename(columns={
-            "Date": "timestamp",
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume"
-        }, inplace=True)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df
+        logging.info(f"[GOOGLE] Attempting fetch for {symbol}")
+        url = f"https://www.google.com/finance/quote/{symbol}"
+        df = pd.read_html(url)[0]  # fallback for latest price
+        if df.empty:
+            raise ValueError("Empty Google data")
+        df["timestamp"] = datetime.utcnow()
+        df.rename(columns={"Price": "close"}, inplace=True)
+        df["open"] = df["high"] = df["low"] = df["close"]
+        df["volume"] = 0
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except Exception as e:
         logging.warning(f"[GOOGLE] Failed for {symbol}: {e}")
         return None
 
 
-# =========================================
-# YAHOO FINANCE FETCH
-# =========================================
-def fetch_yahoo(symbol):
-    """Fetch from Yahoo Finance."""
+# ==============================
+# YAHOO FINANCE FETCHER
+# ==============================
+def get_yahoo_data(symbol, days=30):
     try:
-        mapped = SYMBOL_MAP.get(symbol, {}).get("yahoo", symbol)
-        logging.info(f"[YAHOO] Fetching {symbol} as {mapped}")
-        end = datetime.utcnow()
-        start = end - timedelta(days=60)
+        logging.info(f"[YAHOO] Attempting fetch for {symbol}")
+        data = yf.download(symbol, period=f"{days}d", interval="1h", progress=False)
+        if data.empty:
+            raise ValueError("Empty Yahoo data")
 
-        df = yf.download(mapped, start=start, end=end, progress=False)
-        if df is None or df.empty:
-            return None
-
-        df.reset_index(inplace=True)
-        df.rename(columns={
+        data.reset_index(inplace=True)
+        data.rename(columns={
             "Date": "timestamp",
             "Open": "open",
             "High": "high",
@@ -100,76 +55,75 @@ def fetch_yahoo(symbol):
             "Close": "close",
             "Volume": "volume"
         }, inplace=True)
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        return df
+        return data[["timestamp", "open", "high", "low", "close", "volume"]]
     except Exception as e:
         logging.warning(f"[YAHOO] Failed for {symbol}: {e}")
         return None
 
 
-# =========================================
-# COINGECKO FETCH
-# =========================================
-def fetch_coingecko(symbol):
-    """Fallback fetch from CoinGecko."""
+# ==============================
+# COINGECKO FETCHER
+# ==============================
+def get_coingecko_data(symbol):
     try:
-        mapped = SYMBOL_MAP.get(symbol, {}).get("coingecko")
-        if not mapped:
-            logging.warning(f"[COINGECKO] No mapping for {symbol}")
-            return None
+        logging.info(f"[COINGECKO] Attempting fetch for {symbol}")
+        coin_id = {
+            "BTCUSDT": "bitcoin",
+            "XRPUSDT": "ripple",
+            "GALAUSDT": "gala"
+        }.get(symbol, symbol.lower())
 
-        logging.info(f"[COINGECKO] Fetching {symbol} ({mapped}) ...")
-        data = cg.get_coin_market_chart_by_id(id=mapped, vs_currency="usd", days=60)
-        prices = data.get("prices", [])
-        vols = data.get("total_volumes", [])
+        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+        params = {"vs_currency": "usd", "days": 30, "interval": "hourly"}
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
 
-        df = pd.DataFrame(prices, columns=["timestamp", "close"])
+        data = r.json().get("prices", [])
+        if not data:
+            raise ValueError("Empty CoinGecko data")
+
+        df = pd.DataFrame(data, columns=["timestamp", "close"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df["volume"] = [v[1] for v in vols[:len(df)]]
-        df["open"] = df["close"].shift(1)
-        df["high"] = df["close"].rolling(3, min_periods=1).max()
-        df["low"] = df["close"].rolling(3, min_periods=1).min()
-        df.dropna(inplace=True)
-        return df
+        df["open"] = df["high"] = df["low"] = df["close"]
+        df["volume"] = 0
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except Exception as e:
         logging.warning(f"[COINGECKO] Failed for {symbol}: {e}")
         return None
 
 
-# =========================================
-# MAIN FETCHER LOGIC
-# =========================================
+# ==============================
+# MAIN UNIFIED FETCH FUNCTION
+# ==============================
 def get_data(symbol):
-    """Unified fetcher with Google → Yahoo → CoinGecko fallback."""
+    """Fetch data using Google → Yahoo → CoinGecko → cache fallback."""
     cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-    # Try cache first
+    # Try Google Finance
+    df = get_google_data(symbol)
+    if df is not None and not df.empty:
+        logging.info(f"[FETCH] {symbol} → Google Finance success ✅")
+        df.to_csv(cache_file, index=False)
+        return df
+
+    # Try Yahoo Finance
+    df = get_yahoo_data(symbol)
+    if df is not None and not df.empty:
+        logging.info(f"[FETCH] {symbol} → Yahoo Finance success ✅")
+        df.to_csv(cache_file, index=False)
+        return df
+
+    # Try CoinGecko
+    df = get_coingecko_data(symbol)
+    if df is not None and not df.empty:
+        logging.info(f"[FETCH] {symbol} → CoinGecko success ✅")
+        df.to_csv(cache_file, index=False)
+        return df
+
+    # Last resort: use cache
     if os.path.exists(cache_file):
-        try:
-            df = pd.read_csv(cache_file)
-            if not df.empty:
-                logging.info(f"[CACHE HIT] Loaded {symbol} from cache")
-                return df
-        except Exception as e:
-            logging.warning(f"[CACHE READ FAIL] {symbol}: {e}")
+        logging.warning(f"[CACHE] Using fallback cache for {symbol}")
+        return pd.read_csv(cache_file)
 
-    # Google
-    df = fetch_google(symbol)
-    if df is not None and not df.empty:
-        _save_cache(symbol, df)
-        return df
-
-    # Yahoo
-    df = fetch_yahoo(symbol)
-    if df is not None and not df.empty:
-        _save_cache(symbol, df)
-        return df
-
-    # CoinGecko
-    df = fetch_coingecko(symbol)
-    if df is not None and not df.empty:
-        _save_cache(symbol, df)
-        return df
-
-    logging.error(f"[FAIL] All sources failed for {symbol}")
+    logging.error(f"[FAIL] All fetch methods failed for {symbol}")
     return None
