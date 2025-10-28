@@ -22,6 +22,7 @@ SYMBOLS = {
 CACHE_DIR = "data_cache"
 MODEL_DIR = "models"
 SUMMARY_DIR = "training_summary"
+CACHE_EXPIRY_HOURS = 6  # Cache expires after 6 hours
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -29,37 +30,14 @@ os.makedirs(SUMMARY_DIR, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] %(message)s")
 
-# CoinGecko setup
 USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "true").lower() == "true"
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 BASE_URL = "https://api.coingecko.com/api/v3" if USE_COINGECKO_DEMO else "https://pro-api.coingecko.com/api/v3"
 
 
 # ==============================
-# DATA FETCH HELPERS
+# FETCH HELPERS
 # ==============================
-def fetch_from_binance(symbol):
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=500"
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            raise ValueError(f"Invalid Binance response: {r.status_code}")
-        data = r.json()
-        if not isinstance(data, list):
-            raise ValueError("Invalid Binance response")
-        df = pd.DataFrame(data, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "_", "__", "___", "____", "_____", "______"
-        ])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df = df[["timestamp", "open", "high", "low", "close", "volume"]].astype(float)
-        logging.info(f"[OK] Binance returned {len(df)} rows for {symbol}")
-        return df
-    except Exception as e:
-        logging.warning(f"[WARN] Binance fetch failed for {symbol}: {e}")
-        return pd.DataFrame()
-
-
 def fetch_from_coingecko(coin_id):
     try:
         url = f"{BASE_URL}/coins/{coin_id}/market_chart"
@@ -70,7 +48,7 @@ def fetch_from_coingecko(coin_id):
         r = requests.get(url, params=params, headers=headers, timeout=10)
         data = r.json()
         if "prices" not in data:
-            raise ValueError(f"Invalid response: {data}")
+            raise ValueError(f"Invalid CoinGecko response: {data}")
         prices = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
         volumes = pd.DataFrame(data["total_volumes"], columns=["timestamp", "volume"])
         merged = pd.merge(prices, volumes, on="timestamp", how="inner")
@@ -84,6 +62,26 @@ def fetch_from_coingecko(coin_id):
         return df
     except Exception as e:
         logging.warning(f"[WARN] CoinGecko fetch failed for {coin_id}: {e}")
+        return pd.DataFrame()
+
+
+def fetch_from_binance(symbol):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=500"
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            raise ValueError(f"Invalid Binance response: {r.status_code}")
+        data = r.json()
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "_", "__", "___", "____", "_____", "______"
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df = df[["timestamp", "open", "high", "low", "close", "volume"]].astype(float)
+        logging.info(f"[OK] Binance returned {len(df)} rows for {symbol}")
+        return df
+    except Exception as e:
+        logging.warning(f"[WARN] Binance fetch failed for {symbol}: {e}")
         return pd.DataFrame()
 
 
@@ -105,28 +103,48 @@ def fetch_from_yahoo(symbol):
 
 
 # ==============================
-# CACHE HANDLING
+# CACHE MANAGEMENT
 # ==============================
+def is_cache_valid(cache_path):
+    if not os.path.exists(cache_path):
+        return False
+    mtime = datetime.fromtimestamp(os.path.getmtime(cache_path))
+    if datetime.now() - mtime < timedelta(hours=CACHE_EXPIRY_HOURS):
+        return True
+    else:
+        logging.info(f"[CACHE] Expired cache, deleting {cache_path}")
+        os.remove(cache_path)
+        return False
+
+
 def load_or_fetch(symbol, coin_id):
     cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-    # 1️⃣ Try fresh data (Binance → CoinGecko → Yahoo)
-    logging.info(f"[FETCH] Attempting fresh data for {symbol}")
-    df = fetch_from_binance(symbol)
+    # 1️⃣ Try cache first if valid
+    if is_cache_valid(cache_path):
+        logging.info(f"[CACHE] Using valid cache for {symbol}")
+        df = pd.read_csv(cache_path)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+
+    # 2️⃣ Graceful fallback: CoinGecko → Binance → Yahoo → Old cache
+    logging.info(f"[FETCH] Fetching fresh data for {symbol}")
+    df = fetch_from_coingecko(coin_id)
     if df.empty:
-        df = fetch_from_coingecko(coin_id)
+        df = fetch_from_binance(symbol)
     if df.empty:
         df = fetch_from_yahoo(symbol.replace("USDT", "-USD"))
 
-    # 2️⃣ Cache fallback
+    # 3️⃣ Use old cache if all sources failed
     if df.empty and os.path.exists(cache_path):
-        logging.info(f"[CACHE] Loading cached data for {symbol}")
+        logging.warning(f"[FALLBACK] Using old expired cache for {symbol}")
         df = pd.read_csv(cache_path)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
 
+    # 4️⃣ Save new cache if we got something
     if not df.empty:
         df.to_csv(cache_path, index=False)
-        logging.info(f"[CACHE] Saved {len(df)} rows for {symbol}")
+        logging.info(f"[CACHE] Updated cache for {symbol} ({len(df)} rows)")
 
     return df
 
