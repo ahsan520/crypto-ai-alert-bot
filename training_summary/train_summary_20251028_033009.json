@@ -1,0 +1,17 @@
+{
+  "timestamp": "2025-10-28 03:30:06.172264",
+  "symbols": {
+    "BTCUSDT": {
+      "rows": 2162,
+      "model_trained": true
+    },
+    "XRPUSDT": {
+      "rows": 2162,
+      "model_trained": true
+    },
+    "GALAUSDT": {
+      "rows": 2161,
+      "model_trained": true
+    }
+  }
+}
