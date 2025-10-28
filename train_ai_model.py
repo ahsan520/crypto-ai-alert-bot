@@ -1,138 +1,194 @@
 import os
 import json
 import time
-import joblib
 import requests
-import numpy as np
 import pandas as pd
-import yfinance as yf
+import numpy as np
 from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestRegressor
-from colorama import Fore, Style
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
 
-# === CONFIG ===
-LOOKBACK_DAYS = 60
-INTERVAL = "1h"
-SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
-
-MODEL_DIR = "models"
 CACHE_DIR = "data_cache"
-TELEMETRY_DIR = "training_summary"
-os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
-os.makedirs(TELEMETRY_DIR, exist_ok=True)
 
-# Demo base URL for CoinGecko (required for free/demo keys)
-COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "false").lower() == "true"
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
+COINGECKO_BASE_URL = (
+    "https://api.coingecko.com/api/v3" if USE_COINGECKO_DEMO else "https://pro-api.coingecko.com/api/v3"
+)
 
-def log(msg, level="INFO"):
-    """Timestamped colored log"""
-    color = Fore.GREEN if level == "INFO" else Fore.YELLOW if level == "WARN" else Fore.RED
-    print(f"{color}[{datetime.utcnow().isoformat()}] [{level}] {msg}{Style.RESET_ALL}")
+def log(level, msg):
+    print(f"[{datetime.utcnow().isoformat()}] [{level}] {msg}")
 
-# === FETCHERS ===
-
-def fetch_binance(symbol, interval=INTERVAL, limit=1000):
+# -------------------------------
+# FETCHERS
+# -------------------------------
+def fetch_from_binance(symbol="BTCUSDT", limit=200):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        if not isinstance(data, list):
-            raise ValueError("Invalid Binance response")
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit={limit}"
+        resp = requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            raise Exception("Invalid Binance response")
+        data = resp.json()
         df = pd.DataFrame(data, columns=[
-            "timestamp","open","high","low","close","volume",
-            "_1","_2","_3","_4","_5","_6"
+            "open_time", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "trades",
+            "taker_base_vol", "taker_quote_vol", "ignore"
         ])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.set_index("timestamp", inplace=True)
-        df = df[["open","high","low","close","volume"]].astype(float)
-        return df
+        df["open"] = df["open"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["low"] = df["low"].astype(float)
+        df["close"] = df["close"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms")
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except Exception as e:
-        log(f"Binance fetch failed for {symbol}: {e}", "WARN")
-        return pd.DataFrame()
+        log("WARN", f"Binance fetch failed for {symbol}: {e}")
+        return None
 
-def fetch_coingecko(symbol):
-    """Fetch market chart from CoinGecko (free/demo API compatible)"""
+
+def fetch_from_coingecko(symbol_id="bitcoin", vs_currency="usd", days=30):
     try:
-        coin_map = {"BTCUSDT": "bitcoin", "XRPUSDT": "ripple", "GALAUSDT": "gala"}
-        if symbol not in coin_map:
-            raise ValueError("Unsupported symbol for CoinGecko")
-        coin_id = coin_map[symbol]
-        url = f"{COINGECKO_BASE_URL}/coins/{coin_id}/market_chart"
-        params = {"vs_currency": "usd", "days": "60"}  # ✅ added vs_currency
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
+        url = f"{COINGECKO_BASE_URL}/coins/{symbol_id}/market_chart"
+        params = {"vs_currency": vs_currency, "days": days}
+        headers = {}
+        if COINGECKO_API_KEY:
+            headers["x-cg-pro-api-key"] = COINGECKO_API_KEY
+
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        data = resp.json()
         if "prices" not in data:
-            raise ValueError(f"Invalid response: {data}")
-        prices = pd.DataFrame(data["prices"], columns=["timestamp","price"])
-        volumes = pd.DataFrame(data["total_volumes"], columns=["timestamp","volume"])
-        df = prices.merge(volumes, on="timestamp")
+            raise Exception(f"Invalid response: {json.dumps(data)}")
+
+        df = pd.DataFrame(data["prices"], columns=["timestamp", "close"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df.rename(columns={"price":"close"}, inplace=True)
-        df["open"] = df["close"].shift(1)
-        df["high"] = df["close"].rolling(3).max()
-        df["low"] = df["close"].rolling(3).min()
-        df = df.dropna().set_index("timestamp")
-        return df
+        if "total_volumes" in data:
+            vol_df = pd.DataFrame(data["total_volumes"], columns=["timestamp", "volume"])
+            df["volume"] = vol_df["volume"]
+        else:
+            df["volume"] = np.nan
+        df["open"] = df["close"]
+        df["high"] = df["close"]
+        df["low"] = df["close"]
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except Exception as e:
-        log(f"CoinGecko fetch failed for {symbol}: {e}", "WARN")
-        return pd.DataFrame()
+        log("WARN", f"CoinGecko fetch failed for {symbol_id.upper()}: {e}")
+        return None
 
-def safe_download_yahoo(symbol, period="60d", interval="1h", retries=3, delay=5):
-    for attempt in range(retries):
-        try:
-            df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
-            if not df.empty:
-                return df
-            log(f"Empty Yahoo data for {symbol} (attempt {attempt+1})", "WARN")
-        except Exception as e:
-            log(f"Yahoo fetch failed for {symbol} (attempt {attempt+1}): {e}", "WARN")
-        time.sleep(delay)
-    return pd.DataFrame()
 
-# === CACHE HANDLING ===
+def fetch_from_yahoo(symbol="BTC-USD", period="7d", interval="1h"):
+    try:
+        import yfinance as yf
+        data = yf.download(tickers=symbol, period=period, interval=interval, progress=False)
+        if data.empty:
+            log("WARN", f"Empty Yahoo data for {symbol}")
+            return None
+        df = data.reset_index()
+        df.rename(columns={
+            "Datetime": "timestamp",
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume"
+        }, inplace=True)
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    except Exception as e:
+        log("WARN", f"Yahoo fetch failed for {symbol}: {e}")
+        return None
 
-def load_from_cache(symbol):
-    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
-    if os.path.exists(cache_path):
-        try:
-            df = pd.read_csv(cache_path, parse_dates=["timestamp"], index_col="timestamp")
-            log(f"[CACHE] Loaded {len(df)} rows for {symbol}")
-            return df
-        except Exception:
-            pass
-    return pd.DataFrame()
 
-def save_to_cache(symbol, df):
-    if df.empty:
-        return
-    cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
-    df.to_csv(cache_path)
-    log(f"[CACHE] Saved {len(df)} rows for {symbol}")
+# -------------------------------
+# DATA PIPELINE
+# -------------------------------
+def load_or_fetch(symbol, coingecko_id):
+    cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
 
-# === DATA PIPELINE ===
+    # Try live fetch first
+    log("INFO", f"[FETCH] Attempting fresh data for {symbol}")
+    df = (
+        fetch_from_binance(symbol)
+        or fetch_from_coingecko(coingecko_id)
+        or fetch_from_yahoo(symbol.replace("USDT", "-USD"))
+    )
 
-def get_market_data(symbol):
-    """Try Binance → CoinGecko → Yahoo → cache"""
-    df = fetch_binance(symbol)
-    if df.empty:
-        df = fetch_coingecko(symbol)
-    if df.empty:
-        yf_symbol = symbol.replace("USDT","-USD")
-        df = safe_download_yahoo(yf_symbol)
-    if df.empty:
-        df = load_from_cache(symbol)
+    # Fallback to cache if all fail
+    if df is None or df.empty:
+        if os.path.exists(cache_file):
+            df = pd.read_csv(cache_file, parse_dates=["timestamp"])
+            log("INFO", f"[CACHE] Loaded {len(df)} rows for {symbol}")
+        else:
+            log("ERROR", f"No data available for {symbol}")
+            return None
     else:
-        save_to_cache(symbol, df)
+        df.to_csv(cache_file, index=False)
+        log("INFO", f"[CACHE] Saved {len(df)} rows for {symbol}")
+
     return df
 
-# === TRAINING ===
 
-def prepare_features(df):
-    df["return"] = df["close"].pct_change()
-    df["ma5"] = df["close"].rolling(5).mean()
-    df["ma20"] = df["close"].rolling(20).mean()
-    df["volatility"] = df["close"].rolling(10).std()
-    df = df.dropna()
-    X = df[["open","high","low","close","volume","m]()]()
+# -------------------------------
+# TRAINING
+# -------------------------------
+def train_model(symbol, df):
+    if df is None or df.empty:
+        log("WARN", f"No data to train for {symbol}")
+        return
+
+    if len(df) < 50:
+        log("WARN", f"Not enough data for {symbol} ({len(df)} rows)")
+        return
+
+    # Technical indicators
+    df["sma_5"] = df["close"].rolling(5).mean()
+    df["sma_20"] = df["close"].rolling(20).mean()
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df["rsi_14"] = 100 - (100 / (1 + rs))
+
+    df["future_close"] = df["close"].shift(-1)
+    df.dropna(inplace=True)
+
+    feature_cols = ["open", "high", "low", "close", "volume", "sma_5", "sma_20", "rsi_14"]
+    X = df[feature_cols].values
+    y = df["future_close"].values
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train_scaled, y_train)
+    preds = model.predict(X_test_scaled)
+    mae = mean_absolute_error(y_test, preds)
+
+    log("OK", f"{symbol} model trained (MAE={mae:.4f})")
+
+
+# -------------------------------
+# MAIN EXECUTION
+# -------------------------------
+def main():
+    log("INFO", "[START] AI Model Training Sequence")
+
+    pairs = {
+        "BTCUSDT": "bitcoin",
+        "XRPUSDT": "ripple",
+        "GALAUSDT": "gala"
+    }
+
+    for symbol, cg_id in pairs.items():
+        log("INFO", f"[START] Training {symbol}")
+        df = load_or_fetch(symbol, cg_id)
+        train_model(symbol, df)
+
+    log("OK", "[FINISH] All models processed.")
+
+
+if __name__ == "__main__":
+    main()
