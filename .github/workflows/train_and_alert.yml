@@ -15,56 +15,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout
+      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Setup Python
+      # Step 2: Set up Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # Step 3: Install dependencies
+      # Step 3: Ensure required directories exist
+      - name: Ensure directories exist
+        run: |
+          echo "[SETUP] Ensuring required directories exist..."
+          mkdir -p data_cache models models/spike_trend training_summary
+          echo "[OK] Directories verified."
+
+      # Step 4: Install dependencies
       - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 4: Train AI models
+      # Step 5: Train AI models
       - name: Train AI Models
         run: |
           echo "[RUN] Starting model training..."
           python train_ai_model.py
 
-      # Step 5: Run spike predictor
+      # Step 6: Run spike predictor
       - name: Run Spike Predictor
         run: |
           echo "[RUN] Running spike prediction engine..."
           python spike_predictor.py
 
-      # Step 6: Run alert logic (safe mode)
+      # Step 7: Run alert logic (safe mode)
       - name: Run Crypto AI Alert Logic (safe mode)
         run: |
           echo "[RUN] Executing crypto alert logic..."
           python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
 
-      # Step 7: Upload trained models
+      # Step 8: Upload trained models
       - name: Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      # Step 8: Upload telemetry logs
+      # Step 9: Upload telemetry logs
       - name: Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: training_summary/
 
-      # Step 9: Cleanup old telemetry
+      # Step 10: Cleanup old telemetry
       - name: Cleanup Old Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry..."
