@@ -1,8 +1,8 @@
-name: Crypto AI Hybrid v13.3 - Train & Alert
+name: 🧠 Crypto AI Hybrid v13.5 - Train & Alert
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # Every 30 minutes
+    - cron: "*/30 * * * *"   # Every 30 minutes
   workflow_dispatch:
 
 permissions:
@@ -10,141 +10,150 @@ permissions:
   actions: read
 
 env:
-  USE_COINGECKO_DEMO: "true"
-  COINGECKO_API_KEY: ""
   PYTHONUNBUFFERED: "1"
 
 jobs:
-  run-bot:
+  crypto-ai:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
-      # 1️⃣ Checkout repository
-      - name: 📦 Checkout repository
+      # ---------------------------
+      # 1️⃣ Setup and Checkout
+      # ---------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # 2️⃣ Setup Python
-      - name: 🐍 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 3️⃣ Install dependencies
-      - name: ⚙️ Install dependencies
+      - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
-          pip install yfinance pandas scikit-learn joblib requests beautifulsoup4 lxml
+          pip install yfinance pandas numpy scikit-learn requests joblib matplotlib seaborn pycoingecko
 
-      # 4️⃣ Ensure required folders exist
-      - name: 🗂️ Prepare required folders
+      # ---------------------------
+      # 2️⃣ Prepare required folders
+      # ---------------------------
+      - name: 🗂 Prepare required folders
         run: |
           echo "[INIT] Ensuring models, data_cache, telemetry_logs exist..."
-          mkdir -p models data_cache telemetry_logs training_summary
-          touch models/.gitkeep data_cache/.gitkeep telemetry_logs/.gitkeep
+          mkdir -p models data_cache telemetry_logs utils
 
-      # 5️⃣ Check model freshness
-      - name: 🕒 Check model freshness
-        id: model_check
+      # ---------------------------
+      # 3️⃣ Run unified data fetcher
+      # ---------------------------
+      - name: 📦 Run Multi-Source Data Fetcher
         run: |
-          echo "[CHECK] Checking if models are older than 2 hours..."
-          THRESHOLD=$((60 * 60 * 2))  # 2 hours in seconds
-          REBUILD=false
-          CURRENT_TIME=$(date +%s)
-
-          for FILE in models/*_model.pkl; do
-            if [ -f "$FILE" ]; then
-              MOD_TIME=$(date -r "$FILE" +%s)
-              AGE=$((CURRENT_TIME - MOD_TIME))
-              echo "[INFO] $FILE age: $AGE seconds"
-              if [ "$AGE" -ge "$THRESHOLD" ]; then
-                echo "[WARN] $FILE is older than 2 hours → retraining needed."
-                REBUILD=true
-                break
-              fi
-            else
-              echo "[WARN] Missing model: $FILE → retraining required."
-              REBUILD=true
-              break
-            fi
-          done
-
-          echo "rebuild=$REBUILD" >> $GITHUB_OUTPUT
-
-      # 6️⃣ Conditional: Train AI Models if outdated
-      - name: 🧠 Train AI Models
-        if: steps.model_check.outputs.rebuild == 'true'
-        run: |
-          echo "[RUN] Starting AI model training (outdated or missing models)..."
-          python train_ai_model.py || echo "[WARN] Training script encountered a warning."
-
-      # 7️⃣ Optional: Spike Predictor
-      - name: ⚡ Run Spike Predictor
-        if: always()
-        run: |
-          echo "[RUN] Running spike predictor (if present)..."
-          if [ -f spike_predictor.py ]; then
-            python spike_predictor.py || echo "[WARN] Spike predictor exited with warnings."
+          echo "[RUN] Fetching crypto data using utils/data_fetcher.py..."
+          if [ -f utils/data_fetcher.py ]; then
+            python utils/data_fetcher.py || echo "[WARN] Data fetch fallback triggered — continuing with cache."
           else
-            echo "[INFO] No spike_predictor.py found, skipping."
+            echo "[ERROR] utils/data_fetcher.py not found — please verify repository structure."
           fi
 
-      # 8️⃣ Run Crypto AI Alert Logic
-      - name: 🚨 Run Crypto AI Alert Logic
-        if: always()
+      # ---------------------------
+      # 4️⃣ Check model freshness
+      # ---------------------------
+      - name: ⏱ Check model freshness
+        id: freshness
+        run: |
+          echo "[CHECK] Checking if models are older than 2 hours..."
+          needs_training=false
+          for model in models/*_model.pkl; do
+            if [ -f "$model" ]; then
+              age_seconds=$(( $(date +%s) - $(stat -c %Y "$model") ))
+              echo "[INFO] $model age: ${age_seconds} seconds"
+              if [ $age_seconds -gt 7200 ]; then
+                echo "[WARN] $model older than 2 hours — retraining required."
+                needs_training=true
+              fi
+            else
+              echo "[WARN] Missing model file ($model) — retraining required."
+              needs_training=true
+            fi
+          done
+          echo "needs_training=$needs_training" >> $GITHUB_ENV
+
+      # ---------------------------
+      # 5️⃣ Train AI Models Conditionally
+      # ---------------------------
+      - name: 🧠 Train AI Models
+        if: env.needs_training == 'true'
+        run: |
+          echo "[TRAIN] Starting model training..."
+          python train_ai_model.py || echo "[WARN] Training script encountered an issue."
+
+      - name: ✅ Skip Training (Models Fresh)
+        if: env.needs_training == 'false'
+        run: echo "[INFO] Models are up-to-date (younger than 2 hours). Skipping training."
+
+      # ---------------------------
+      # 6️⃣ Run Spike Predictor (Updated filename)
+      # ---------------------------
+      - name: ⚡ Run Spike Predictor
+        run: |
+          echo "[RUN] Executing spike predictor..."
+          if [ -f spike_predictor.py ]; then
+            python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
+          else
+            echo "[INFO] spike_predictor.py not found, skipping."
+          fi
+
+      # ---------------------------
+      # 7️⃣ Run Crypto AI Alert Logic (v10)
+      # ---------------------------
+      - name: 🚨 Run Crypto AI Alert Logic (v10)
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          if [ -f crypto_ai_alert_v10.py ]; then
+            python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          else
+            echo "[ERROR] crypto_ai_alert_v10.py not found — please verify file path."
+          fi
 
-      # 9️⃣ Upload trained models (if rebuilt)
-      - name: 📤 Upload Trained Models
-        if: steps.model_check.outputs.rebuild == 'true'
+      # ---------------------------
+      # 8️⃣ Upload Trained Models
+      # ---------------------------
+      - name: 💾 Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      # 🔟 Upload telemetry logs
-      - name: 📤 Upload Telemetry Logs
+      # ---------------------------
+      # 9️⃣ Upload Telemetry Logs
+      # ---------------------------
+      - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: telemetry_logs/
 
-      # 1️⃣1️⃣ Cleanup telemetry logs (optional)
-      - name: 🧹 Cleanup Telemetry Logs
-        run: |
-          echo "[RUN] Cleaning up old telemetry logs..."
-          if [ -f telemetry_cleanup.py ]; then
-            python telemetry_cleanup.py || echo "[WARN] Cleanup script failed."
-          else
-            echo "[INFO] No telemetry_cleanup.py found, skipping."
-          fi
-
-      # 1️⃣2️⃣ Commit & push updates only if needed
-      - name: 🔄 Commit and Push Updated Artifacts
+      # ---------------------------
+      # 🔟 Commit and Push Models + Telemetry
+      # ---------------------------
+      - name: 🪶 Commit and Push Models + Telemetry
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[GIT] Preparing to commit trained models + telemetry..."
-          git config --global user.email "actions@github.com"
-          git config --global user.name "GitHub Actions Bot"
-
-          # Force add models, telemetry, and summaries
-          git add -f models/*.pkl telemetry_logs/*.json data_cache/* training_summary/*.json || true
-
+          echo "[GIT] Saving models and telemetry logs..."
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add -f models/*.pkl telemetry_logs/*.json data_cache/* || true
           if git diff --cached --quiet; then
-            echo "[INFO] No changes detected. Skipping commit."
+            echo "[INFO] No changes detected, skipping commit."
           else
-            git commit -m "🤖 Auto-update: trained models + telemetry @ $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            git pull --rebase origin main || echo "[WARN] Pull/rebase failed, continuing."
-            git push origin main || echo "[WARN] Push failed (possible race)."
+            git commit -m "🤖 Auto-update: Models + Telemetry ($(date '+%Y-%m-%d %H:%M:%S'))"
+            git pull --rebase origin main || echo "[WARN] Rebase skipped or failed."
+            git push origin main || echo "[WARN] Push failed (check permissions)."
           fi
 
+      # ---------------------------
       # ✅ Finish
+      # ---------------------------
       - name: ✅ Done
-        run: echo "[FINISH] Crypto AI Hybrid v13.3 workflow completed successfully."
+        run: echo "[FINISH] Crypto AI Hybrid v13.5 workflow completed successfully."
