@@ -1,4 +1,4 @@
-name: "🧠 Crypto AI Hybrid v13.6 - Train & Alert"
+name: "🧠 Crypto AI Hybrid v13.7 - Fetch → Train → Alert"
 
 on:
   schedule:
@@ -47,25 +47,27 @@ jobs:
           mkdir -p models data_cache telemetry_logs utils training_summary
 
       # ---------------------------
-      # 3️⃣ Run unified data fetcher (fixed path)
+      # 3️⃣ Run Multi-Source Data Fetcher
       # ---------------------------
       - name: 📦 Run Multi-Source Data Fetcher
         run: |
           echo "[RUN] Fetching crypto data using utils/data_fetcher.py..."
-          echo "[DEBUG] Working directory: $(pwd)"
-          echo "[DEBUG] Listing files:"
-          ls -R || true
+          echo "[DEBUG] Workspace: ${{ github.workspace }}"
+          cd "${{ github.workspace }}" || exit 1
 
-          cd "${GITHUB_WORKSPACE}" || exit 1
           if [ -f "utils/data_fetcher.py" ]; then
-            echo "[INFO] ✅ Found utils/data_fetcher.py — executing..."
-            python utils/data_fetcher.py || echo "[WARN] Data fetch fallback triggered — continuing with cache."
+            echo "[INFO] ✅ Found utils/data_fetcher.py — running..."
+            python utils/data_fetcher.py || {
+              echo "[❌ ERROR] Data fetch failed — stopping workflow."
+              exit 1
+            }
           else
             echo "[❌ ERROR] utils/data_fetcher.py not found in $(pwd)"
-            echo "[INFO] Contents of utils/:"
-            ls -al utils || true
             exit 1
           fi
+
+          echo "[INFO] Post-fetch check:"
+          ls -lh data_cache || echo "[WARN] No cache created."
 
       # ---------------------------
       # 4️⃣ Check model freshness
@@ -75,20 +77,27 @@ jobs:
         run: |
           echo "[CHECK] Checking if models are older than 2 hours..."
           needs_training=false
+          mkdir -p models
+          found_model=false
           for model in models/*_model.pkl; do
             if [ -f "$model" ]; then
+              found_model=true
               age_seconds=$(( $(date +%s) - $(stat -c %Y "$model") ))
               echo "[INFO] $model age: ${age_seconds}s"
               if [ $age_seconds -gt 7200 ]; then
                 echo "[WARN] $model older than 2 hours — retraining required."
                 needs_training=true
               fi
-            else
-              echo "[WARN] Missing model file ($model) — retraining required."
-              needs_training=true
             fi
           done
+
+          if [ "$found_model" = false ]; then
+            echo "[WARN] No model found — training required."
+            needs_training=true
+          fi
+
           echo "needs_training=$needs_training" >> $GITHUB_ENV
+          echo "[RESULT] Training needed: $needs_training"
 
       # ---------------------------
       # 5️⃣ Train AI Models Conditionally
@@ -101,10 +110,10 @@ jobs:
 
       - name: ✅ Skip Training (Models Fresh)
         if: env.needs_training == 'false'
-        run: echo "[INFO] Models are up-to-date (younger than 2 hours). Skipping training."
+        run: echo "[INFO] Models are fresh (<2h). Skipping training."
 
       # ---------------------------
-      # 6️⃣ Run Spike Predictor (updated)
+      # 6️⃣ Run Spike Predictor
       # ---------------------------
       - name: ⚡ Run Spike Predictor
         run: |
@@ -168,4 +177,4 @@ jobs:
       # ✅ Finish
       # ---------------------------
       - name: ✅ Done
-        run: echo "[FINISH] Crypto AI Hybrid v13.6 workflow completed successfully."
+        run: echo "[FINISH] Crypto AI Hybrid v13.7 workflow completed successfully."
