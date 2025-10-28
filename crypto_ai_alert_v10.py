@@ -1,106 +1,57 @@
-#!/usr/bin/env python3
-# -----------------------------------------------------
-# Crypto AI Hybrid v12 — Source-aware Alert Engine
-# -----------------------------------------------------
+# crypto_ai_alert_v10.py
 import os
-import time
-import json
-import joblib
-import logging
-import requests
 import pandas as pd
 from datetime import datetime
-from utils.data_fetcher import get_data
+from utils.data_fetcher import fetch_and_cache
+from spike_predictor import run_spike_predictor
+from model_trainer import train_model_if_needed
 
-# -----------------------------------------------------
-# Configuration
-# -----------------------------------------------------
 MODEL_DIR = "models"
-SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
+DATA_DIR = "data_cache"
+MAX_MODEL_AGE_HRS = 2
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+def is_model_stale(model_path):
+    if not os.path.exists(model_path):
+        print(f"[WARN] Missing model: {model_path}")
+        return True
+    age_seconds = (datetime.now().timestamp() - os.path.getmtime(model_path))
+    age_hrs = age_seconds / 3600
+    print(f"[INFO] {model_path} age: {age_hrs:.2f} hours")
+    return age_hrs > MAX_MODEL_AGE_HRS
 
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-
-
-# -----------------------------------------------------
-# Telegram Alerts
-# -----------------------------------------------------
-def send_telegram(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        logging.info(f"[INFO] Telegram not configured, skipping:\n{message}")
-        return
+def ensure_data(symbol):
+    path = os.path.join(DATA_DIR, f"{symbol}.csv")
+    if not os.path.exists(path) or os.path.getsize(path) < 1000:
+        print(f"[INFO] Missing or small cache for {symbol}. Re-fetching...")
+        fetch_and_cache(symbol)
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message},
-        )
-    except Exception as e:
-        logging.error(f"[TELEGRAM ERROR] {e}")
+        df = pd.read_csv(path)
+        if len(df) < 50:
+            print(f"[WARN] Not enough data for {symbol} ({len(df)} rows). Re-fetching...")
+            fetch_and_cache(symbol)
+    except Exception:
+        fetch_and_cache(symbol)
 
+def main():
+    print(f"[RUN] Executing crypto alert logic at {datetime.now()}")
+    symbols = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
 
-# -----------------------------------------------------
-# Prediction & Alert Logic
-# -----------------------------------------------------
-def compute_features(df):
-    df = df.sort_values("timestamp").tail(1)
-    return df[["open", "high", "low", "close", "volume"]].values
+    # 1️⃣ Ensure data available
+    for sym in symbols:
+        ensure_data(sym)
 
+    # 2️⃣ Train if needed
+    for sym in symbols:
+        model_path = os.path.join(MODEL_DIR, f"{sym}_model.pkl")
+        if is_model_stale(model_path):
+            print(f"[TRAIN] Training model for {sym} ...")
+            train_model_if_needed(sym)
+        else:
+            print(f"[SKIP] Model fresh for {sym}.")
 
-def run_alert_cycle():
-    logging.info(f"[INFO] Starting alert cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    for symbol in SYMBOLS:
-        try:
-            model_path = os.path.join(MODEL_DIR, f"{symbol}_model.pkl")
-            if not os.path.exists(model_path):
-                logging.warning(f"[WARN] Model not found: {model_path}")
-                continue
-
-            df = get_data(symbol)
-            if df is None or len(df) < 2:
-                logging.warning(f"[WARN] No recent data for {symbol}")
-                continue
-
-            model = joblib.load(model_path)
-            X = compute_features(df)
-            y_pred = model.predict(X)[0]
-            last_close = df["close"].iloc[-1]
-            delta = y_pred - last_close
-
-            decision = (
-                "BUY ✅" if delta > 0 else
-                "SELL ❌" if delta < 0 else
-                "HOLD ⚪"
-            )
-
-            src = df.attrs.get("source", "unknown")
-            msg = (
-                f"{symbol} → {decision}\n"
-                f"Predicted: {round(y_pred, 4)}\n"
-                f"Last Close: {round(last_close, 4)}\n"
-                f"Δ: {round(delta, 4)}\n"
-                f"Source: {src}\n"
-                f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
-            )
-
-            logging.info(msg)
-            send_telegram(msg)
-            time.sleep(2)
-
-        except Exception as e:
-            logging.error(f"[ERROR] {symbol}: {e}")
-
-    logging.info("[DONE] Alert cycle complete.")
-
+    # 3️⃣ Run predictor
+    run_spike_predictor(symbols)
+    print("[DONE] Alert cycle complete.")
 
 if __name__ == "__main__":
-    logging.info("[RUN] Executing Crypto AI Alert Engine (v12)")
-    run_alert_cycle()
+    main()
