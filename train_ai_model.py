@@ -10,7 +10,6 @@ from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.ensemble import RandomForestRegressor
 
-# === CONFIG ===
 LOOKBACK_DAYS = 60
 INTERVAL = "1h"
 SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
@@ -25,20 +24,18 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "true").lower() in ["true", "1", "yes"]
-
-if USE_COINGECKO_DEMO:
-    COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
-else:
-    COINGECKO_BASE_URL = "https://pro-api.coingecko.com/api/v3"
+COINGECKO_BASE_URL = (
+    "https://api.coingecko.com/api/v3"
+    if USE_COINGECKO_DEMO
+    else "https://pro-api.coingecko.com/api/v3"
+)
 
 def log(msg, level="INFO"):
     ts = datetime.utcnow().isoformat()
     print(f"[{ts}] [{level}] {msg}")
 
-# === FETCHING LAYERS ===
-
+# --- Binance ---
 def fetch_binance(symbol, interval=INTERVAL, limit=1000):
-    """Fetch OHLC data from Binance API"""
     try:
         url = f"https://api.binance.com/api/v3/klines?symbol={symbol.upper()}&interval={interval}&limit={limit}"
         r = requests.get(url, timeout=10)
@@ -58,8 +55,9 @@ def fetch_binance(symbol, interval=INTERVAL, limit=1000):
         log(f"Binance fetch failed for {symbol}: {e}", "WARN")
         return pd.DataFrame()
 
+# --- CoinGecko ---
 def fetch_coingecko(symbol):
-    """Fetch hourly OHLC data from CoinGecko API"""
+    """Fetch OHLC data from CoinGecko API (no interval parameter)"""
     try:
         coin_map = {"BTCUSDT": "bitcoin", "XRPUSDT": "ripple", "GALAUSDT": "gala"}
         coin_id = coin_map.get(symbol.upper())
@@ -68,11 +66,8 @@ def fetch_coingecko(symbol):
             return pd.DataFrame()
 
         headers = {"accept": "application/json"}
-        params = {
-            "days": "14",
-            "interval": "hourly"
-        }
-        if not USE_COINGECKO_DEMO:
+        params = {"days": "14"}
+        if not USE_COINGECKO_DEMO and COINGECKO_API_KEY:
             params["x_cg_pro_api_key"] = COINGECKO_API_KEY
 
         url = f"{COINGECKO_BASE_URL}/coins/{coin_id}/market_chart"
@@ -81,23 +76,28 @@ def fetch_coingecko(symbol):
             raise ValueError(f"Invalid response: {r.text}")
 
         data = r.json().get("prices", [])
+        if not data:
+            raise ValueError("No price data returned")
+
         df = pd.DataFrame(data, columns=["timestamp", "price"])
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df["close"] = df["price"]
         df["open"] = df["high"] = df["low"] = df["price"]
         df["volume"] = 0
         df.set_index("timestamp", inplace=True)
+        log(f"[OK] CoinGecko data fetched for {symbol}: {len(df)} rows")
         return df[["open", "high", "low", "close", "volume"]]
     except Exception as e:
         log(f"CoinGecko fetch failed for {symbol}: {e}", "WARN")
         return pd.DataFrame()
 
+# --- Yahoo Finance fallback ---
 def safe_download_yahoo(symbol, period="60d", interval="1h", retries=3, delay=5):
-    """Yahoo Finance fallback with retry"""
     for attempt in range(retries):
         try:
             df = yf.download(symbol, period=period, interval=interval, progress=False, threads=False)
             if not df.empty:
+                df = df.rename(columns=str.lower)
                 return df
             log(f"Empty Yahoo data for {symbol} (attempt {attempt+1})", "WARN")
         except Exception as e:
@@ -105,8 +105,8 @@ def safe_download_yahoo(symbol, period="60d", interval="1h", retries=3, delay=5)
         time.sleep(delay)
     return pd.DataFrame()
 
+# --- Cache ---
 def load_from_cache(symbol):
-    """Load cached data if exists"""
     path = os.path.join(CACHE_DIR, f"{symbol}.csv")
     if os.path.exists(path):
         df = pd.read_csv(path, parse_dates=["timestamp"], index_col="timestamp")
@@ -115,13 +115,11 @@ def load_from_cache(symbol):
     return pd.DataFrame()
 
 def save_to_cache(symbol, df):
-    """Save data to cache"""
     if not df.empty:
         df.to_csv(os.path.join(CACHE_DIR, f"{symbol}.csv"))
         log(f"[CACHE] Saved {len(df)} rows for {symbol}")
 
 def get_market_data(symbol):
-    """Unified fetch sequence: Binance → CoinGecko → Yahoo → Cache"""
     df = fetch_binance(symbol)
     if df.empty:
         df = fetch_coingecko(symbol)
@@ -134,8 +132,7 @@ def get_market_data(symbol):
         save_to_cache(symbol, df)
     return df
 
-# === MODEL TRAINING ===
-
+# --- Features + Training ---
 def prepare_features(df):
     df["return"] = df["close"].pct_change()
     df["ma5"] = df["close"].rolling(5).mean()
@@ -165,8 +162,7 @@ def train_model(symbol, df):
         log(f"[ERROR] Training failed for {symbol}: {e}")
         return False
 
-# === MAIN ===
-
+# --- Main ---
 def main():
     log("[INFO] [START] AI Model Training Sequence")
     telemetry = {"start_time": str(datetime.utcnow()), "symbols": {}}
