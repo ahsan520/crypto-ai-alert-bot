@@ -179,4 +179,16 @@ def main():
             log(f"[ERROR] No usable data for {symbol}", "ERROR")
             telemetry["symbols"][symbol] = {"status": "failed_no_data"}
             continue
-        status = train_model(symbol, df)_
+        status = train_model(symbol, df)
+        telemetry["symbols"][symbol] = {"status": "success" if status else "failed"}
+        time.sleep(2)
+
+    telemetry["end_time"] = str(datetime.utcnow())
+    telemetry_path = os.path.join(TELEMETRY_DIR, f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(telemetry_path, "w") as f:
+        json.dump(telemetry, f, indent=2)
+    log(f"[DONE] Telemetry saved → {telemetry_path}")
+    log("[DONE] Model training complete.")
+
+if __name__ == "__main__":
+    main()
