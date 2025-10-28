@@ -52,7 +52,6 @@ jobs:
       - name: 📦 Run Multi-Source Data Fetcher
         run: |
           echo "[RUN] Fetching crypto data using utils/data_fetcher.py..."
-          echo "[DEBUG] Workspace: ${{ github.workspace }}"
           cd "${{ github.workspace }}" || exit 1
 
           if [ -f "utils/data_fetcher.py" ]; then
@@ -61,8 +60,14 @@ jobs:
               echo "[❌ ERROR] Data fetch failed — stopping workflow."
               exit 1
             }
+          elif [ -f "data_fetcher.py" ]; then
+            echo "[INFO] Found root-level data_fetcher.py — running..."
+            python data_fetcher.py || {
+              echo "[❌ ERROR] Root-level data fetch failed — stopping workflow."
+              exit 1
+            }
           else
-            echo "[❌ ERROR] utils/data_fetcher.py not found in $(pwd)"
+            echo "[❌ ERROR] data_fetcher.py not found in $(pwd)"
             exit 1
           fi
 
@@ -70,7 +75,7 @@ jobs:
           ls -lh data_cache || echo "[WARN] No cache created."
 
       # ---------------------------
-      # 4️⃣ Check model freshness (with missing-model detection)
+      # 4️⃣ Check model freshness
       # ---------------------------
       - name: ⏱ Check model freshness
         id: freshness
@@ -111,27 +116,39 @@ jobs:
         run: echo "[INFO] Models are fresh (<2h). Skipping training."
 
       # ---------------------------
-      # 6️⃣ Run Spike Predictor
+      # 6️⃣ Run Spike Predictor (with patch)
       # ---------------------------
       - name: ⚡ Run Spike Predictor
         run: |
           echo "[RUN] Executing spike predictor..."
-          if [ -f spike_predictor.py ]; then
+          cd "${{ github.workspace }}" || exit 1
+
+          if [ -f "spike_predictor.py" ]; then
+            echo "[INFO] ✅ Found spike_predictor.py — running..."
             python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
+          elif [ -f "utils/spike_predictor.py" ]; then
+            echo "[INFO] Found utils/spike_predictor.py — running..."
+            python utils/spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
           else
-            echo "[INFO] spike_predictor.py not found — skipping."
+            echo "[❌ ERROR] spike_predictor.py not found in $(pwd) or utils/"
           fi
 
       # ---------------------------
-      # 7️⃣ Run Crypto AI Alert Logic (v10)
+      # 7️⃣ Run Crypto AI Alert Logic (v10) (with patch)
       # ---------------------------
       - name: 🚨 Run Crypto AI Alert Logic (v10)
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          if [ -f crypto_ai_alert_v10.py ]; then
+          cd "${{ github.workspace }}" || exit 1
+
+          if [ -f "crypto_ai_alert_v10.py" ]; then
+            echo "[INFO] ✅ Found crypto_ai_alert_v10.py — running..."
             python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          elif [ -f "utils/crypto_ai_alert_v10.py" ]; then
+            echo "[INFO] Found utils/crypto_ai_alert_v10.py — running..."
+            python utils/crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
           else
-            echo "[ERROR] crypto_ai_alert_v10.py not found — please verify file path."
+            echo "[❌ ERROR] crypto_ai_alert_v10.py not found in root or utils/"
           fi
 
       # ---------------------------
