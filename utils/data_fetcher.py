@@ -1,81 +1,198 @@
-# utils/data_fetcher.py
+#!/usr/bin/env python3
+"""
+utils/data_fetcher.py
+--------------------------------------
+Unified crypto data fetcher with automatic multi-source fallback.
+
+Sources (in order of priority):
+  1. Binance (ccxt)
+  2. Kraken (ccxt)
+  3. Coinbase (ccxt)
+  4. Yahoo Finance (yfinance)
+  5. CoinGecko (pycoingecko)
+
+All public data — no authentication required.
+Cached data is saved under data_cache/{symbol}.csv.
+"""
+
 import os
 import time
+import logging
 import pandas as pd
 import yfinance as yf
-import requests
-from datetime import datetime, timedelta
+from pycoingecko import CoinGeckoAPI
 
-DATA_CACHE_DIR = "data_cache"
-os.makedirs(DATA_CACHE_DIR, exist_ok=True)
+# optional dependency for exchanges
+try:
+    import ccxt
+except ImportError:
+    ccxt = None
+    print("[WARN] ccxt not installed; only Yahoo & CoinGecko sources will work.")
 
-def fetch_from_google(symbol, days=3):
-    """Fetch data using Google Finance CSV API"""
-    print(f"[FETCH] Trying Google Finance for {symbol} ...")
+# ---------------------------------
+# CONFIG
+# ---------------------------------
+CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data_cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# ---------------------------------
+# Helper: save to cache
+# ---------------------------------
+def _cache(symbol: str, df: pd.DataFrame):
+    if df is not None and not df.empty:
+        path = os.path.join(CACHE_DIR, f"{symbol}.csv")
+        df.to_csv(path, index=False)
+        logging.info(f"[CACHE] Saved {len(df)} rows for {symbol} → {path}")
+    else:
+        logging.warning(f"[CACHE] No data to save for {symbol}")
+
+# ---------------------------------
+# Binance fetch (public OHLCV)
+# ---------------------------------
+def fetch_binance(symbol: str, days=30, interval="1h"):
+    if ccxt is None:
+        return pd.DataFrame()
     try:
-        url = f"https://www.google.com/finance/quote/{symbol}"
-        df = pd.read_html(requests.get(url, timeout=10).text)[0]
-        if df.empty:
-            raise ValueError("Empty dataframe from Google.")
-        df.columns = [c.lower() for c in df.columns]
-        df['timestamp'] = pd.to_datetime(datetime.utcnow())
-        print(f"[OK] Google Finance fetched {len(df)} rows for {symbol}")
-        return df
-    except Exception as e:
-        print(f"[WARN] Google Finance failed for {symbol}: {e}")
-        return None
-
-def fetch_from_yahoo(symbol, days=3):
-    """Fetch data using yfinance"""
-    print(f"[FETCH] Trying Yahoo Finance for {symbol} ...")
-    try:
-        data = yf.download(symbol, period=f"{days}d", interval="15m", progress=False)
-        if data.empty:
-            raise ValueError("Empty dataframe from Yahoo.")
-        data.reset_index(inplace=True)
-        print(f"[OK] Yahoo Finance fetched {len(data)} rows for {symbol}")
-        return data
-    except Exception as e:
-        print(f"[WARN] Yahoo Finance failed for {symbol}: {e}")
-        return None
-
-def fetch_from_coingecko(symbol, days=3):
-    """Fetch data from CoinGecko as last fallback"""
-    print(f"[FETCH] Trying CoinGecko for {symbol} ...")
-    try:
-        coingecko_map = {"BTCUSDT": "bitcoin", "XRPUSDT": "ripple", "GALAUSDT": "gala"}
-        coin_id = coingecko_map.get(symbol.upper())
-        if not coin_id:
-            raise ValueError("Symbol not in coingecko_map.")
-        url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-        params = {"vs_currency": "usd", "days": days, "interval": "hourly"}
-        resp = requests.get(url, params=params, timeout=10)
-        data = resp.json().get("prices", [])
-        if not data:
-            raise ValueError("Empty data from CoinGecko.")
-        df = pd.DataFrame(data, columns=["timestamp", "price"])
+        exchange = ccxt.binance()
+        pair = symbol.replace("USDT", "/USDT")
+        since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
+        ohlcv = exchange.fetch_ohlcv(pair, timeframe=interval, since=since)
+        df = pd.DataFrame(
+            ohlcv,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        df["close"] = df["price"]
-        df.drop(columns=["price"], inplace=True)
-        print(f"[OK] CoinGecko fetched {len(df)} rows for {symbol}")
+        logging.info(f"[BINANCE] {symbol} → {len(df)} rows")
         return df
     except Exception as e:
-        print(f"[ERROR] CoinGecko failed for {symbol}: {e}")
-        return None
+        logging.warning(f"[BINANCE] Failed for {symbol}: {e}")
+        return pd.DataFrame()
 
-def fetch_and_cache(symbol, days=3):
-    """Try all sources in fallback chain and cache result."""
-    for fetcher in [fetch_from_google, fetch_from_yahoo, fetch_from_coingecko]:
-        df = fetcher(symbol, days)
+# ---------------------------------
+# Kraken fetch
+# ---------------------------------
+def fetch_kraken(symbol: str, days=30, interval="1h"):
+    if ccxt is None:
+        return pd.DataFrame()
+    try:
+        exchange = ccxt.kraken()
+        pair = symbol.replace("USDT", "/USDT")
+        since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
+        ohlcv = exchange.fetch_ohlcv(pair, timeframe=interval, since=since)
+        df = pd.DataFrame(
+            ohlcv,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        logging.info(f"[KRAKEN] {symbol} → {len(df)} rows")
+        return df
+    except Exception as e:
+        logging.warning(f"[KRAKEN] Failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+# ---------------------------------
+# Coinbase fetch
+# ---------------------------------
+def fetch_coinbase(symbol: str, days=30, interval="1h"):
+    if ccxt is None:
+        return pd.DataFrame()
+    try:
+        exchange = ccxt.coinbase()
+        pair = symbol.replace("USDT", "/USDT")
+        since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
+        ohlcv = exchange.fetch_ohlcv(pair, timeframe=interval, since=since)
+        df = pd.DataFrame(
+            ohlcv,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
+        )
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        logging.info(f"[COINBASE] {symbol} → {len(df)} rows")
+        return df
+    except Exception as e:
+        logging.warning(f"[COINBASE] Failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+# ---------------------------------
+# Yahoo Finance fallback
+# ---------------------------------
+def fetch_yahoo(symbol: str, period="30d", interval="1h"):
+    try:
+        ticker = yf.Ticker(symbol.replace("USDT", "-USD"))
+        df = ticker.history(period=period, interval=interval)
+        if df.empty:
+            raise ValueError("No data returned.")
+        df = df.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
+        )
+        df = df.reset_index().rename(columns={"Datetime": "timestamp"})
+        logging.info(f"[YAHOO] {symbol} → {len(df)} rows")
+        return df
+    except Exception as e:
+        logging.warning(f"[YAHOO] Failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+# ---------------------------------
+# CoinGecko fallback
+# ---------------------------------
+def fetch_coingecko(symbol: str):
+    try:
+        cg = CoinGeckoAPI()
+        cg_id = {
+            "BTCUSDT": "bitcoin",
+            "ETHUSDT": "ethereum",
+            "XRPUSDT": "ripple",
+            "GALAUSDT": "gala",
+        }.get(symbol, symbol.lower().replace("usdt", ""))
+
+        data = cg.get_coin_market_chart_by_id(id=cg_id, vs_currency="usd", days="30")
+        prices = data.get("prices", [])
+        if not prices:
+            raise ValueError("No CoinGecko price data.")
+        df = pd.DataFrame(prices, columns=["timestamp", "close"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+        df["open"] = df["close"]
+        df["high"] = df["close"]
+        df["low"] = df["close"]
+        df["volume"] = [v[1] for v in data.get("total_volumes", [])[: len(df)]]
+        logging.info(f"[COINGECKO] {symbol} → {len(df)} rows")
+        return df
+    except Exception as e:
+        logging.warning(f"[COINGECKO] Failed for {symbol}: {e}")
+        return pd.DataFrame()
+
+# ---------------------------------
+# Unified get_data()
+# ---------------------------------
+def get_data(symbol: str, days=30, interval="1h"):
+    """
+    Unified fetch chain:
+    Binance → Kraken → Coinbase → Yahoo → CoinGecko
+    """
+    for src, func in [
+        ("Binance", fetch_binance),
+        ("Kraken", fetch_kraken),
+        ("Coinbase", fetch_coinbase),
+        ("Yahoo", fetch_yahoo),
+        ("CoinGecko", fetch_coingecko),
+    ]:
+        logging.info(f"[TRY] {src} for {symbol}...")
+        df = func(symbol, days, interval) if "days" in func.__code__.co_varnames else func(symbol)
         if df is not None and not df.empty:
-            path = os.path.join(DATA_CACHE_DIR, f"{symbol}.csv")
-            df.to_csv(path, index=False)
-            print(f"[CACHE] Saved {len(df)} rows → {path}")
+            _cache(symbol, df)
+            logging.info(f"[OK] {src} succeeded for {symbol}")
             return df
-    print(f"[FAIL] All sources failed for {symbol}. No data cached.")
-    return None
-
-if __name__ == "__main__":
-    print("[RUN] Fetching crypto data using utils/data_fetcher.py...")
-    for sym in ["BTCUSDT", "XRPUSDT", "GALAUSDT"]:
-        fetch_and_cache(sym)
+        time.sleep(1)
+    logging.error(f"[FAIL] All sources failed for {symbol}")
+    return pd.DataFrame()
