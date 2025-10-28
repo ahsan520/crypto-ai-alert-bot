@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-crypto_ai_alert_v10.1.py - Production alert runner (patched)
+crypto_ai_alert_v10.2.py - Production alert runner (stable)
 Fixes:
+- Robust Yahoo Finance retry with threads=False
+- Graceful fallback to cache if Yahoo fails
 - Compatible with sklearn >=1.7.2 unpickle
 - Silences yfinance FutureWarnings
-- Adds .iloc[0] fix for single-row candle values
-- Cleans feature pipeline for stability
+- Ensures clean telemetry even if data is missing
 """
 
 import os
@@ -92,11 +93,18 @@ def load_spike_pack(symbol):
         return None
 
 def fetch_latest_candle(symbol):
+    """Fetch latest candle with robust Yahoo retry/fallback logic."""
     yf_sym = MAPPING.get(symbol)
     if yf is not None:
-        try:
-            df = yf.download(yf_sym, period="2d", interval="1h", progress=False, auto_adjust=True)
-            if df is not None and not df.empty:
+        for attempt, period in enumerate(["2d", "7d"], 1):
+            try:
+                df = yf.download(
+                    yf_sym, period=period, interval="1h",
+                    progress=False, auto_adjust=True, threads=False
+                )
+                if df is None or df.empty:
+                    raise ValueError("Yahoo returned no data")
+
                 last = df.tail(1)
                 return {
                     "timestamp": last.index[-1].to_pydatetime(),
@@ -106,24 +114,28 @@ def fetch_latest_candle(symbol):
                     "close": float(last["Close"].iloc[0]),
                     "volume": float(last["Volume"].iloc[0]),
                 }
-        except Exception as e:
-            print(f"[WARN] yfinance failed for {symbol}: {e}")
-    # fallback to cache
+            except Exception as e:
+                print(f"[WARN] Yahoo fetch (attempt {attempt}) failed for {symbol}: {e}")
+                time.sleep(1)
+
+    # fallback to cache if Yahoo fails
     cache_path = os.path.join(CACHE_DIR, f"{symbol}.csv")
     if os.path.exists(cache_path):
         try:
             df = pd.read_csv(cache_path, parse_dates=["timestamp"])
-            last = df.iloc[-1]
-            return {
-                "timestamp": last["timestamp"],
-                "open": last["open"],
-                "high": last["high"],
-                "low": last["low"],
-                "close": last["close"],
-                "volume": last["volume"],
-            }
+            if not df.empty:
+                last = df.iloc[-1]
+                return {
+                    "timestamp": last["timestamp"],
+                    "open": last["open"],
+                    "high": last["high"],
+                    "low": last["low"],
+                    "close": last["close"],
+                    "volume": last["volume"],
+                }
         except Exception as e:
             print(f"[WARN] Cache read failed for {symbol}: {e}")
+    print(f"[WARN] No valid candle data for {symbol}")
     return None
 
 def ema(series, span):
