@@ -22,7 +22,9 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-# Config
+# ========================
+# CONFIG SETUP
+# ========================
 HERE = os.path.dirname(__file__)
 CFG_PATH = os.path.join(HERE, "config.json")
 if not os.path.exists(CFG_PATH):
@@ -38,11 +40,16 @@ LOOKBACK_DAYS = int(cfg.get("lookback_days", 30))
 INTERVAL = cfg.get("interval", "1h")
 SPIKE_WINDOW = int(cfg.get("spike_window", 3))
 SPIKE_THRESH = float(cfg.get("alert_probability_thresholds", {}).get("spike_alert", cfg.get("spike_confidence_threshold", 0.8)))
-# feature names used for spike models
-SPIKE_FEATURES = ['return','vol_change','rsi','macd']
 
-# helper: load cache (trainer will have saved these)
+# Feature names used for spike models
+SPIKE_FEATURES = ['return', 'vol_change', 'rsi', 'macd']
+
+# ========================
+# HELPERS
+# ========================
+
 def load_cache(symbol):
+    """Load cached CSV file."""
     path = os.path.join(CACHE_DIR, f"{symbol}.csv")
     if not os.path.exists(path):
         return pd.DataFrame()
@@ -53,8 +60,9 @@ def load_cache(symbol):
         print(f"[WARN] failed loading cache {path}: {e}")
         return pd.DataFrame()
 
-# featurize used by spike trainer - keep consistent with main trainer
+
 def featurize(df):
+    """Feature engineering for spike/dip model training."""
     df = df.copy()
     df['close'] = pd.to_numeric(df['close'], errors='coerce')
     df['open'] = pd.to_numeric(df['open'], errors='coerce')
@@ -70,75 +78,113 @@ def featurize(df):
     df = df.dropna()
     return df
 
+
 def label_spike(df, window=SPIKE_WINDOW, threshold=0.02):
+    """Label 1 if price spikes within next `window` periods."""
     closes = df['close'].values
     lab = []
-    for i in range(len(closes)-window):
+    for i in range(len(closes) - window):
         future = closes[i+1:i+1+window]
         m = (future.max() - closes[i]) / closes[i]
         lab.append(1 if m > threshold else 0)
     return pd.Series(lab, index=df.index[:-window])
 
+
 def label_dip(df, window=SPIKE_WINDOW, threshold=0.02):
+    """Label 1 if price dips within next `window` periods."""
     closes = df['close'].values
     lab = []
-    for i in range(len(closes)-window):
+    for i in range(len(closes) - window):
         future = closes[i+1:i+1+window]
         m = (closes[i] - future.min()) / closes[i]
         lab.append(1 if m > threshold else 0)
     return pd.Series(lab, index=df.index[:-window])
 
+# ========================
+# TRAINING
+# ========================
+
 def train_for_symbol(symbol):
+    """Train spike/dip/trend models for one crypto symbol."""
     print(f"[START] spike training for {symbol}")
     df = load_cache(symbol)
     if df.empty or len(df) < 120:
         print(f"[WARN] Not enough cached data for {symbol} ({len(df)} rows). Skipping.")
         return False
+
     try:
         dfx = featurize(df)
         if len(dfx) < (SPIKE_WINDOW + 50):
             print(f"[WARN] Not enough rows after featurize for {symbol}")
             return False
+
+        # Labels
         spike_y = label_spike(dfx, window=SPIKE_WINDOW, threshold=0.02)
         dip_y = label_dip(dfx, window=SPIKE_WINDOW, threshold=0.02)
         dfx_trim = dfx.iloc[:-SPIKE_WINDOW]
         X = dfx_trim[SPIKE_FEATURES].fillna(0).values
-        # train spike RF
+
+        # Spike RF
         X_train, X_test, y_train, y_test = train_test_split(X, spike_y.values, test_size=0.2, random_state=42, stratify=spike_y.values)
         rf_spike = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
         rf_spike.fit(X_train, y_train)
-        # train dip RF
+
+        # Dip RF
         X_train, X_test, y_train, y_test = train_test_split(X, dip_y.values, test_size=0.2, random_state=42, stratify=dip_y.values)
         rf_dip = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
         rf_dip.fit(X_train, y_train)
-        # trend classifier (LogisticRegression)
+
+        # Trend (LogisticRegression)
         trend_y = (dfx['return'].rolling(3).mean().shift(-1) > 0).astype(int).iloc[:-SPIKE_WINDOW].values
         log = LogisticRegression(max_iter=300)
         log.fit(X, trend_y)
-        # save pack
-        pack = {"spike": rf_spike, "dip": rf_dip, "trend": log, "features": SPIKE_FEATURES, "trained_at_utc": datetime.utcnow().isoformat()}
+
+        # Save spike pack
+        pack = {
+            "spike": rf_spike,
+            "dip": rf_dip,
+            "trend": log,
+            "features": SPIKE_FEATURES,
+            "trained_at_utc": datetime.utcnow().isoformat()
+        }
         out_path = os.path.join(SPIKE_DIR, f"{symbol}_spike_pack.pkl")
         joblib.dump(pack, out_path)
         print(f"[SAVED] spike pack for {symbol} -> {out_path}")
         return True
+
     except Exception as e:
         print(f"[ERROR] Exception training spike predictor for {symbol}: {e}\n{traceback.format_exc()}")
         return False
 
+# ========================
+# MAIN + WRAPPER
+# ========================
+
 def main():
+    """Run spike predictor training for all configured symbols."""
     results = {}
     for s in SYMBOLS:
         ok = train_for_symbol(s)
         results[s] = ok
-    # telemetry
+
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     out = {"timestamp_utc": datetime.utcnow().isoformat(), "results": results}
+
     try:
-        with open(os.path.join(HERE, cfg.get("telemetry_viewer", {}).get("log_dir", "telemetry_logs"), f"spike_train_summary_{ts}.json"), "w") as f:
+        telemetry_dir = os.path.join(HERE, cfg.get("telemetry_viewer", {}).get("log_dir", "telemetry_logs"))
+        os.makedirs(telemetry_dir, exist_ok=True)
+        with open(os.path.join(telemetry_dir, f"spike_train_summary_{ts}.json"), "w") as f:
             json.dump(out, f, indent=2)
     except Exception:
         pass
+
     print("[DONE] spike predictor run finished.")
+
+
+def run_spike_predictor():
+    """Wrapper for alert_v10 compatibility"""
+    return main()
+
 
 if __name__ == "__main__":
     main()
