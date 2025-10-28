@@ -5,6 +5,10 @@ on:
     - cron: "*/30 * * * *"  # Every 30 minutes
   workflow_dispatch:
 
+permissions:
+  contents: write  # allow the workflow to commit model updates
+  actions: read
+
 env:
   USE_COINGECKO_DEMO: "true"  # Use demo API; set to false when switching to Pro
   COINGECKO_API_KEY: ""       # Optional if demo mode is true
@@ -19,67 +23,47 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: true
           fetch-depth: 0
 
-      # Step 2: Setup Python
+      # Step 2: Set up Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # Step 3: Ensure folder structure and commit gitkeep if missing
-      - name: Ensure folder structure and commit .gitkeep
-        run: |
-          echo "[SETUP] Creating required folders..."
-          mkdir -p models/models_spike models/spike_trend data_cache training_summary
-
-          # Ensure empty .gitkeep in each
-          touch models/.gitkeep
-          touch models/spike_trend/.gitkeep
-          touch data_cache/.gitkeep
-          touch training_summary/.gitkeep
-
-          echo "[OK] Folder structure ready:"
-          tree -d -L 2 || ls -R .
-
-          # Commit the folders if they don't exist in git yet
-          if [ -n "$(git status --porcelain models/)" ]; then
-            echo "[GIT] Committing models/.gitkeep so folder persists in repo..."
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add models/.gitkeep models/spike_trend/.gitkeep || true
-            git commit -m "Add models folder with .gitkeep for AI training" || echo "[GIT] Nothing to commit"
-            git push || echo "[GIT] Push skipped (no permission or already up-to-date)"
-          fi
-
-      # Step 4: Install dependencies
+      # Step 3: Install dependencies
       - name: Install dependencies
         run: |
-          echo "[SETUP] Installing dependencies..."
+          echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 5: Train AI Models
+      # Step 4: Ensure directories exist
+      - name: Ensure required folders exist
+        run: |
+          echo "[INIT] Ensuring models and training_summary folders exist..."
+          mkdir -p models training_summary data_cache
+          touch models/.gitkeep training_summary/.gitkeep
+
+      # Step 5: Train AI models
       - name: Train AI Models
         run: |
           echo "[RUN] Starting model training..."
           python train_ai_model.py
 
-      # Step 6: Run Spike Predictor
+      # Step 6: Run spike predictor
       - name: Run Spike Predictor
         run: |
           echo "[RUN] Running spike prediction engine..."
           python spike_predictor.py
 
-      # Step 7: Run Crypto AI Alert Logic (safe mode)
+      # Step 7: Run alert logic (safe mode)
       - name: Run Crypto AI Alert Logic (safe mode)
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          mkdir -p models models/spike_trend data_cache training_summary
           python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
 
-      # Step 8: Upload trained models
+      # Step 8: Upload trained models (for inspection)
       - name: Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
@@ -93,8 +77,22 @@ jobs:
           name: telemetry_logs
           path: training_summary/
 
-      # Step 10: Cleanup old telemetry logs
+      # Step 10: Cleanup old telemetry
       - name: Cleanup Old Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry..."
-          python telemetry_cleanup.py
+          python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped"
+
+      # Step 11: Commit & push model updates
+      - name: Commit and push updated models
+        run: |
+          echo "[GIT] Committing and pushing trained models..."
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions Bot"
+          git add models/ training_summary/
+          if git diff --cached --quiet; then
+            echo "[INFO] No changes to commit."
+          else
+            git commit -m "Auto-update: AI model training artifacts [skip ci]"
+            git push origin main
+          fi
