@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -45,7 +45,7 @@ jobs:
           mkdir -p models data_cache telemetry_logs
           touch models/.gitkeep data_cache/.gitkeep telemetry_logs/.gitkeep
 
-      # 5️⃣ Train models
+      # 5️⃣ Train AI Models
       - name: Train AI Models
         run: |
           echo "[RUN] Starting AI model training..."
@@ -100,10 +100,10 @@ jobs:
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions Bot"
 
-          # Force-add ignored dirs (.gitignore-safe)
-          git add -f models/*.pkl telemetry_logs/*.json data_cache/*.csv || true
+          # Force-add ignored or binary files
+          git add -f models/*.pkl telemetry_logs/*.json data_cache/* || true
 
-          # Commit only if there are changes
+          # Commit only if changes exist
           if git diff --cached --quiet; then
             echo "[INFO] No changes detected, skipping commit."
           else
