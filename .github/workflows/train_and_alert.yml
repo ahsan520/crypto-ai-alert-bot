@@ -33,7 +33,7 @@ jobs:
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
-          pip install yfinance pandas numpy scikit-learn requests joblib matplotlib seaborn pycoingecko
+          pip install yfinance pandas numpy scikit-learn requests joblib matplotlib seaborn pycoingecko ccxt
 
       # ---------------------------
       # 2️⃣ Prepare required folders
