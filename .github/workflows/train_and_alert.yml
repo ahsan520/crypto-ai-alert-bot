@@ -18,65 +18,29 @@ jobs:
       # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
-      # Step 2: Set up Python
+      # Step 2: Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # Step 3: Ensure directories exist
-      - name: Ensure required directories exist
+      # Step 3: Ensure folder structure and commit gitkeep if missing
+      - name: Ensure folder structure and commit .gitkeep
         run: |
-          echo "[SETUP] Creating required directories..."
-          mkdir -p data_cache models models/spike_trend training_summary
-          ls -R .
-          echo "[OK] Directory structure verified."
-          echo "[CHECK] Models directory:"
-          ls -l models || echo "[WARN] Models folder missing!"
+          echo "[SETUP] Creating required folders..."
+          mkdir -p models/models_spike models/spike_trend data_cache training_summary
 
-      # Step 4: Install dependencies
-      - name: Install dependencies
-        run: |
-          echo "[SETUP] Installing Python dependencies..."
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Ensure empty .gitkeep in each
+          touch models/.gitkeep
+          touch models/spike_trend/.gitkeep
+          touch data_cache/.gitkeep
+          touch training_summary/.gitkeep
 
-      # Step 5: Train AI Models
-      - name: Train AI Models
-        run: |
-          echo "[RUN] Starting model training..."
-          python train_ai_model.py
+          echo "[OK] Folder structure ready:"
+          tree -d -L 2 || ls -R .
 
-      # Step 6: Run Spike Predictor
-      - name: Run Spike Predictor
-        run: |
-          echo "[RUN] Running spike prediction engine..."
-          python spike_predictor.py
-
-      # Step 7: Run Alert Logic (safe mode)
-      - name: Run Crypto AI Alert Logic (safe mode)
-        run: |
-          echo "[RUN] Executing crypto alert logic..."
-          mkdir -p models models/spike_trend data_cache  # extra safeguard
-          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
-
-      # Step 8: Upload Trained Models
-      - name: Upload Trained Models
-        uses: actions/upload-artifact@v4
-        with:
-          name: trained_models
-          path: models/
-
-      # Step 9: Upload Telemetry Logs
-      - name: Upload Telemetry Logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: telemetry_logs
-          path: training_summary/
-
-      # Step 10: Cleanup Old Telemetry Logs
-      - name: Cleanup Old Telemetry Logs
-        run: |
-          echo "[RUN] Cleaning up old telemetry..."
-          python telemetry_cleanup.py
+          # Comm
