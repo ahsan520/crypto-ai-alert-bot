@@ -160,10 +160,13 @@ def train_for_symbol(symbol):
 # MAIN + WRAPPER
 # ========================
 
-def main():
+def main(symbols=None):
     """Run spike predictor training for all configured symbols."""
+    if symbols is None:
+        symbols = SYMBOLS
+
     results = {}
-    for s in SYMBOLS:
+    for s in symbols:
         ok = train_for_symbol(s)
         results[s] = ok
 
@@ -181,9 +184,10 @@ def main():
     print("[DONE] spike predictor run finished.")
 
 
-def run_spike_predictor():
-    """Wrapper for alert_v10 compatibility"""
-    return main()
+# 🔧 UPDATED WRAPPER
+def run_spike_predictor(symbols=None):
+    """Wrapper for alert_v10 compatibility."""
+    return main(symbols)
 
 
 if __name__ == "__main__":
