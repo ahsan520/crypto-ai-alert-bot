@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+train_ai_model.py - Core trainer for Crypto AI Hybrid v13.7
+
+- Loads cached or freshly fetched data from utils/data_fetcher
+- Trains RandomForest models for each symbol
+- Saves trained models and JSON training summaries
+- Provides train_model_if_needed() for external modules (v10 alert logic)
+"""
+
 import os
 import json
 import joblib
@@ -50,8 +59,48 @@ def train_model(symbol, df):
 
     return model
 
+
 # ==============================
-# MAIN ENTRY
+# WRAPPER FOR OTHER MODULES
+# ==============================
+def train_model_if_needed(symbols=None):
+    """
+    Public function for external imports (used by crypto_ai_alert_v10.py).
+
+    Checks if models exist or are stale (>2h old). Retrains if needed.
+    """
+    symbols = symbols or SYMBOLS
+    updated_models = {}
+
+    for symbol in symbols:
+        model_path = os.path.join(MODEL_DIR, f"{symbol}_model.pkl")
+
+        retrain = True
+        if os.path.exists(model_path):
+            age_seconds = (datetime.now().timestamp() - os.path.getmtime(model_path))
+            retrain = age_seconds > 7200  # 2 hours
+            if retrain:
+                logging.info(f"[INFO] {symbol} model is stale ({int(age_seconds)}s old) — retraining.")
+            else:
+                logging.info(f"[INFO] {symbol} model is fresh (<2h). Skipping retrain.")
+                updated_models[symbol] = model_path
+                continue
+
+        df = get_data(symbol)
+        if df is None or df.empty:
+            logging.warning(f"[WARN] Skipping {symbol}: no data returned from fetcher.")
+            continue
+
+        model = train_model(symbol, df)
+        if model is not None:
+            updated_models[symbol] = model_path
+
+    logging.info(f"[SUMMARY] Updated models: {list(updated_models.keys())}")
+    return updated_models
+
+
+# ==============================
+# MAIN ENTRY POINT
 # ==============================
 def main():
     logging.info("[START] 🧠 Crypto AI Model Training Sequence")
@@ -62,34 +111,36 @@ def main():
     }
 
     for symbol in SYMBOLS:
-        logging.info(f"[FETCH] Loading data for {symbol}")
+        try:
+            logging.info(f"[FETCH] Loading data for {symbol}")
+            df = get_data(symbol)
 
-        # Fetch using multi-source data_fetcher
-        df = get_data(symbol)
+            if df is None or df.empty:
+                logging.warning(f"[WARN] No valid data retrieved for {symbol}. Skipping.")
+                continue
 
-        if df is None or df.empty:
-            logging.warning(f"[WARN] No valid data retrieved for {symbol}. Skipping.")
-            continue
+            source_tag = df.attrs.get("source", "cache/unknown")
+            logging.info(f"[SOURCE] {symbol} → {source_tag} ({len(df)} rows)")
 
-        source_tag = df.attrs.get("source", "cache/unknown")
-        logging.info(f"[SOURCE] {symbol} → {source_tag} ({len(df)} rows)")
+            cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
+            if not os.path.exists(cache_file):
+                logging.warning(f"[WARN] Cache file missing for {symbol}: {cache_file}")
+            else:
+                logging.info(f"[CACHE] {symbol} data cached → {cache_file}")
 
-        cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
-        if not os.path.exists(cache_file):
-            logging.warning(f"[WARN] Cache file missing for {symbol}: {cache_file}")
-        else:
-            logging.info(f"[CACHE] {symbol} data cached → {cache_file}")
+            # Train and save model
+            model = train_model(symbol, df)
 
-        # Train and save model
-        model = train_model(symbol, df)
+            summary["symbols"][symbol] = {
+                "rows": len(df),
+                "model_trained": model is not None,
+                "source": source_tag,
+                "cache_file": cache_file,
+                "model_path": os.path.join(MODEL_DIR, f"{symbol}_model.pkl"),
+            }
 
-        summary["symbols"][symbol] = {
-            "rows": len(df),
-            "model_trained": model is not None,
-            "source": source_tag,
-            "cache_file": cache_file,
-            "model_path": os.path.join(MODEL_DIR, f"{symbol}_model.pkl"),
-        }
+        except Exception as e:
+            logging.error(f"[ERROR] Training failed for {symbol}: {e}", exc_info=True)
 
     # Save JSON training summary
     summary_path = os.path.join(
