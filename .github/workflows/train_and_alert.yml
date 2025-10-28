@@ -48,7 +48,7 @@ jobs:
       - name: Run Crypto AI Alert Logic (safe mode)
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          python crypto_ai_alert_v10.2.py || echo "[WARN] Alert logic exited with non-zero status"
+          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
 
       # Step 7: Upload trained models
       - name: Upload Trained Models
