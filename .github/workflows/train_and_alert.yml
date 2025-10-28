@@ -6,110 +6,143 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # Allow commits/pushes
+  contents: write
   actions: read
 
 env:
-  USE_COINGECKO_DEMO: "true"   # Use demo API; set to false for Pro
-  COINGECKO_API_KEY: ""        # Optional when demo=true
+  USE_COINGECKO_DEMO: "true"
+  COINGECKO_API_KEY: ""
   PYTHONUNBUFFERED: "1"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       # 1️⃣ Checkout repository
-      - name: Checkout repository
+      - name: 📦 Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2️⃣ Python setup
-      - name: Set up Python
+      # 2️⃣ Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       # 3️⃣ Install dependencies
-      - name: Install dependencies
+      - name: ⚙️ Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
+          pip install yfinance pandas scikit-learn joblib requests beautifulsoup4 lxml
 
-      # 4️⃣ Ensure folders exist
-      - name: Ensure required folders exist
+      # 4️⃣ Ensure required folders exist
+      - name: 🗂️ Prepare required folders
         run: |
-          echo "[INIT] Ensuring models, data_cache, telemetry_logs folders exist..."
-          mkdir -p models data_cache telemetry_logs
+          echo "[INIT] Ensuring models, data_cache, telemetry_logs exist..."
+          mkdir -p models data_cache telemetry_logs training_summary
           touch models/.gitkeep data_cache/.gitkeep telemetry_logs/.gitkeep
 
-      # 5️⃣ Train AI Models
-      - name: Train AI Models
+      # 5️⃣ Check model freshness
+      - name: 🕒 Check model freshness
+        id: model_check
         run: |
-          echo "[RUN] Starting AI model training..."
+          echo "[CHECK] Checking if models are older than 2 hours..."
+          THRESHOLD=$((60 * 60 * 2))  # 2 hours in seconds
+          REBUILD=false
+          CURRENT_TIME=$(date +%s)
+
+          for FILE in models/*_model.pkl; do
+            if [ -f "$FILE" ]; then
+              MOD_TIME=$(date -r "$FILE" +%s)
+              AGE=$((CURRENT_TIME - MOD_TIME))
+              echo "[INFO] $FILE age: $AGE seconds"
+              if [ "$AGE" -ge "$THRESHOLD" ]; then
+                echo "[WARN] $FILE is older than 2 hours → retraining needed."
+                REBUILD=true
+                break
+              fi
+            else
+              echo "[WARN] Missing model: $FILE → retraining required."
+              REBUILD=true
+              break
+            fi
+          done
+
+          echo "rebuild=$REBUILD" >> $GITHUB_OUTPUT
+
+      # 6️⃣ Conditional: Train AI Models if outdated
+      - name: 🧠 Train AI Models
+        if: steps.model_check.outputs.rebuild == 'true'
+        run: |
+          echo "[RUN] Starting AI model training (outdated or missing models)..."
           python train_ai_model.py || echo "[WARN] Training script encountered a warning."
 
-      # 6️⃣ Spike prediction (optional)
-      - name: Run Spike Predictor
+      # 7️⃣ Optional: Spike Predictor
+      - name: ⚡ Run Spike Predictor
+        if: always()
         run: |
-          echo "[RUN] Running spike prediction engine..."
+          echo "[RUN] Running spike predictor (if present)..."
           if [ -f spike_predictor.py ]; then
-            python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
+            python spike_predictor.py || echo "[WARN] Spike predictor exited with warnings."
           else
-            echo "[INFO] spike_predictor.py not found, skipping."
+            echo "[INFO] No spike_predictor.py found, skipping."
           fi
 
-      # 7️⃣ Run Crypto AI Alert Logic
-      - name: Run Crypto AI Alert Logic (Safe Mode)
+      # 8️⃣ Run Crypto AI Alert Logic
+      - name: 🚨 Run Crypto AI Alert Logic
+        if: always()
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          python crypto_ai_alert_v11.py || echo "[WARN] Alert logic exited with non-zero status."
 
-      # 8️⃣ Upload trained models as artifacts
-      - name: Upload Trained Models
+      # 9️⃣ Upload trained models (if rebuilt)
+      - name: 📤 Upload Trained Models
+        if: steps.model_check.outputs.rebuild == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      # 9️⃣ Upload telemetry logs as artifacts
-      - name: Upload Telemetry Logs
+      # 🔟 Upload telemetry logs
+      - name: 📤 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: telemetry_logs/
 
-      # 🔟 Cleanup telemetry (optional)
-      - name: Cleanup Old Telemetry Logs
+      # 1️⃣1️⃣ Cleanup telemetry logs (optional)
+      - name: 🧹 Cleanup Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry logs..."
           if [ -f telemetry_cleanup.py ]; then
-            python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped."
+            python telemetry_cleanup.py || echo "[WARN] Cleanup script failed."
           else
-            echo "[INFO] telemetry_cleanup.py not found, skipping."
+            echo "[INFO] No telemetry_cleanup.py found, skipping."
           fi
 
-      # 1️⃣1️⃣ Commit and push updated models + telemetry logs
-      - name: Commit and push updated models and telemetry
+      # 1️⃣2️⃣ Commit & push updates only if needed
+      - name: 🔄 Commit and Push Updated Artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[GIT] Committing and pushing trained models + telemetry logs..."
+          echo "[GIT] Preparing to commit trained models + telemetry..."
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions Bot"
 
-          # Force-add ignored or binary files
-          git add -f models/*.pkl telemetry_logs/*.json data_cache/* || true
+          # Force add models, telemetry, and summaries
+          git add -f models/*.pkl telemetry_logs/*.json data_cache/* training_summary/*.json || true
 
-          # Commit only if changes exist
           if git diff --cached --quiet; then
-            echo "[INFO] No changes detected, skipping commit."
+            echo "[INFO] No changes detected. Skipping commit."
           else
-            git commit -m "Auto-update: AI model + telemetry artifacts [skip ci]"
-            git pull --rebase origin main || echo "[WARN] Rebase skipped or failed."
-            git push origin main || echo "[WARN] Push failed (check permissions)."
+            git commit -m "🤖 Auto-update: trained models + telemetry @ $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            git pull --rebase origin main || echo "[WARN] Pull/rebase failed, continuing."
+            git push origin main || echo "[WARN] Push failed (possible race)."
           fi
 
       # ✅ Finish
