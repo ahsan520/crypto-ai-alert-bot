@@ -6,13 +6,12 @@ import logging
 import pandas as pd
 from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor
-from utils.data_fetcher import get_data
+from utils.data_fetcher import get_data, CACHE_DIR
 
 # ==============================
 # CONFIGURATION
 # ==============================
 SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
-CACHE_DIR = "data_cache"
 MODEL_DIR = "models"
 SUMMARY_DIR = "training_summary"
 
@@ -25,7 +24,6 @@ logging.basicConfig(
     format="[%(asctime)s] [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 
 # ==============================
 # TRAINING FUNCTION
@@ -52,12 +50,11 @@ def train_model(symbol, df):
 
     return model
 
-
 # ==============================
 # MAIN ENTRY
 # ==============================
 def main():
-    logging.info("[START] Crypto AI Model Training Sequence")
+    logging.info("[START] 🧠 Crypto AI Model Training Sequence")
 
     summary = {
         "timestamp": str(datetime.utcnow()),
@@ -66,6 +63,8 @@ def main():
 
     for symbol in SYMBOLS:
         logging.info(f"[FETCH] Loading data for {symbol}")
+
+        # Fetch using multi-source data_fetcher
         df = get_data(symbol)
 
         if df is None or df.empty:
@@ -78,7 +77,10 @@ def main():
         cache_file = os.path.join(CACHE_DIR, f"{symbol}.csv")
         if not os.path.exists(cache_file):
             logging.warning(f"[WARN] Cache file missing for {symbol}: {cache_file}")
+        else:
+            logging.info(f"[CACHE] {symbol} data cached → {cache_file}")
 
+        # Train and save model
         model = train_model(symbol, df)
 
         summary["symbols"][symbol] = {
@@ -89,7 +91,7 @@ def main():
             "model_path": os.path.join(MODEL_DIR, f"{symbol}_model.pkl"),
         }
 
-    # Save training summary
+    # Save JSON training summary
     summary_path = os.path.join(
         SUMMARY_DIR,
         f"train_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json",
@@ -98,7 +100,7 @@ def main():
         json.dump(summary, f, indent=2)
 
     logging.info(f"[DONE] Training summary saved → {summary_path}")
-    logging.info(f"[FINISH] All models processed successfully.")
+    logging.info("[FINISH] ✅ All models processed successfully.")
 
 
 if __name__ == "__main__":
