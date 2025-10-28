@@ -191,8 +191,38 @@ def get_data(symbol: str, days=30, interval="1h"):
         df = func(symbol, days, interval) if "days" in func.__code__.co_varnames else func(symbol)
         if df is not None and not df.empty:
             _cache(symbol, df)
+            df.attrs["source"] = src
             logging.info(f"[OK] {src} succeeded for {symbol}")
             return df
         time.sleep(1)
     logging.error(f"[FAIL] All sources failed for {symbol}")
     return pd.DataFrame()
+
+# ---------------------------------
+# Compatibility wrapper for alert script
+# ---------------------------------
+def fetch_and_cache(symbols):
+    """
+    Fetch and cache multiple symbols — for backward compatibility.
+    Used by crypto_ai_alert_v10.py.
+    """
+    results = {}
+    for sym in symbols:
+        df = get_data(sym)
+        if df is not None and not df.empty:
+            results[sym] = df
+            logging.info(f"[FETCH_AND_CACHE] {sym}: {len(df)} rows ready.")
+        else:
+            logging.warning(f"[FETCH_AND_CACHE] {sym}: no valid data.")
+    return results
+
+
+# ---------------------------------
+# Run standalone (manual test)
+# ---------------------------------
+if __name__ == "__main__":
+    TEST_SYMBOLS = ["BTCUSDT", "XRPUSDT", "GALAUSDT"]
+    logging.info("[RUN] Manual test: fetching sample data...")
+    results = fetch_and_cache(TEST_SYMBOLS)
+    for sym, df in results.items():
+        print(f"{sym}: {len(df)} rows from {df.attrs.get('source', 'unknown')}")
