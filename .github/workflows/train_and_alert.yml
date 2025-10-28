@@ -43,4 +43,58 @@ jobs:
           echo "[OK] Folder structure ready:"
           tree -d -L 2 || ls -R .
 
-          # Comm
+          # Commit the folders if they don't exist in git yet
+          if [ -n "$(git status --porcelain models/)" ]; then
+            echo "[GIT] Committing models/.gitkeep so folder persists in repo..."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add models/.gitkeep models/spike_trend/.gitkeep || true
+            git commit -m "Add models folder with .gitkeep for AI training" || echo "[GIT] Nothing to commit"
+            git push || echo "[GIT] Push skipped (no permission or already up-to-date)"
+          fi
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: |
+          echo "[SETUP] Installing dependencies..."
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 5: Train AI Models
+      - name: Train AI Models
+        run: |
+          echo "[RUN] Starting model training..."
+          python train_ai_model.py
+
+      # Step 6: Run Spike Predictor
+      - name: Run Spike Predictor
+        run: |
+          echo "[RUN] Running spike prediction engine..."
+          python spike_predictor.py
+
+      # Step 7: Run Crypto AI Alert Logic (safe mode)
+      - name: Run Crypto AI Alert Logic (safe mode)
+        run: |
+          echo "[RUN] Executing crypto alert logic..."
+          mkdir -p models models/spike_trend data_cache training_summary
+          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
+
+      # Step 8: Upload trained models
+      - name: Upload Trained Models
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained_models
+          path: models/
+
+      # Step 9: Upload telemetry logs
+      - name: Upload Telemetry Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry_logs
+          path: training_summary/
+
+      # Step 10: Cleanup old telemetry logs
+      - name: Cleanup Old Telemetry Logs
+        run: |
+          echo "[RUN] Cleaning up old telemetry..."
+          python telemetry_cleanup.py
