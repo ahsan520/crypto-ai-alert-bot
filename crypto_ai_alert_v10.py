@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# crypto_ai_alert_v10.py
+# crypto_ai_alert_v11.py
 # -----------------------------------------------------
-# Crypto AI Hybrid v10 — Real-time alert + telemetry
+# Crypto AI Hybrid v11 — Unified cache + real-time alerts
 # -----------------------------------------------------
 import os
 import time
@@ -15,16 +15,17 @@ from sklearn.ensemble import RandomForestRegressor
 # -----------------------------------------------------
 # Configuration
 # -----------------------------------------------------
-CACHE_DIR = "telemetry_logs"
-os.makedirs(CACHE_DIR, exist_ok=True)
+DATA_CACHE = "data_cache"
+MODEL_DIR = "models"
+os.makedirs(DATA_CACHE, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 CONFIG = {
-    "BTCUSDT": {"model": "models/btc_rf.pkl"},
-    "XRPUSDT": {"model": "models/xrp_rf.pkl"},
-    "GALAUSDT": {"model": "models/gala_rf.pkl"},
+    "BTCUSDT": {"model": f"{MODEL_DIR}/btc_rf.pkl"},
+    "XRPUSDT": {"model": f"{MODEL_DIR}/xrp_rf.pkl"},
+    "GALAUSDT": {"model": f"{MODEL_DIR}/gala_rf.pkl"},
 }
 
-# Use environment variables for secure secrets
 COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
 USE_COINGECKO_DEMO = os.getenv("USE_COINGECKO_DEMO", "true").lower() == "true"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -35,29 +36,25 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Helpers
 # -----------------------------------------------------
 def fetch_latest_candle(symbol):
-    """Fetch latest OHLCV candle from CoinGecko or fallback."""
+    """Fetch latest OHLCV candle from CoinGecko."""
     base_url = "https://api.coingecko.com/api/v3"
-    if COINGECKO_API_KEY and not USE_COINGECKO_DEMO:
-        headers = {"x-cg-pro-api-key": COINGECKO_API_KEY}
-    else:
-        headers = {}
+    headers = {"x-cg-pro-api-key": COINGECKO_API_KEY} if COINGECKO_API_KEY and not USE_COINGECKO_DEMO else {}
 
     pair = symbol.replace("USDT", "").lower()
     url = f"{base_url}/coins/{pair}/ohlc?vs_currency=usd&days=1"
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 429:
-            print(f"[WARN] CoinGecko rate limit for {symbol}, sleeping...")
+            print(f"[WARN] Rate limited for {symbol}, retrying...")
             time.sleep(3)
             return None
         if resp.status_code != 200:
-            print(f"[WARN] CoinGecko returned {resp.status_code} for {symbol}")
+            print(f"[WARN] CoinGecko {symbol} → {resp.status_code}")
             return None
 
         data = resp.json()
-        if not data or len(data) == 0:
+        if not data:
             return None
-        # latest candle = [timestamp, open, high, low, close]
         ts, o, h, l, c = data[-1]
         return {
             "timestamp": datetime.utcfromtimestamp(ts / 1000),
@@ -65,22 +62,20 @@ def fetch_latest_candle(symbol):
             "high": h,
             "low": l,
             "close": c,
-            "volume": 1.0,  # CoinGecko free API doesn’t return volume
+            "volume": 1.0,
         }
     except Exception as e:
-        print(f"[ERROR] Failed to fetch {symbol}: {e}")
+        print(f"[ERROR] Fetch failed for {symbol}: {e}")
         return None
 
 
 def update_cache(symbol, candle):
-    """Maintain rolling JSON cache of last 3 candles per symbol."""
-    file_path = os.path.join(CACHE_DIR, f"{symbol}_0.json")
-    data = []
-    if os.path.exists(file_path):
-        try:
-            data = json.load(open(file_path))
-        except Exception:
-            data = []
+    """Maintain rolling cache (3 recent candles)."""
+    file_path = os.path.join(DATA_CACHE, f"{symbol}.json")
+    try:
+        data = json.load(open(file_path)) if os.path.exists(file_path) else []
+    except Exception:
+        data = []
     data.append(candle)
     data = sorted(data, key=lambda x: x["timestamp"])[-3:]
     json.dump(data, open(file_path, "w"), default=str, indent=2)
@@ -89,77 +84,85 @@ def update_cache(symbol, candle):
 def send_telegram_message(message):
     """Send alert to Telegram."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print(f"[INFO] Telegram not configured. Skipping alert:\n{message}")
+        print(f"[INFO] Telegram not configured, skipping alert:\n{message}")
         return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": message},
+        )
     except Exception as e:
         print(f"[ERROR] Telegram send failed: {e}")
 
 
 # -----------------------------------------------------
-# Feature + AI Logic
+# AI Feature & Decision Logic
 # -----------------------------------------------------
 def compute_features(df):
-    """Ensure 5 feature columns same as training."""
+    """Use same 5 features as training."""
     df = df.sort_values("timestamp").tail(1)
-    X = df[["open", "high", "low", "close", "volume"]].values
-    return X
+    return df[["open", "high", "low", "close", "volume"]].values
 
 
 def run_alert_cycle():
     """Main alert loop."""
-    print(f"\n[INFO] Alert cycle started {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"\n[INFO] Starting alert cycle at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     for symbol, cfg in CONFIG.items():
         try:
+            model_path = cfg["model"]
+            if not os.path.exists(model_path):
+                print(f"[WARN] Missing model: {model_path}")
+                continue
+
             candle = fetch_latest_candle(symbol)
             if not candle:
                 continue
-            update_cache(symbol, candle)
 
-            # build DataFrame for this symbol
-            file_path = os.path.join(CACHE_DIR, f"{symbol}_0.json")
-            data = json.load(open(file_path))
-            df = pd.DataFrame(data)
-            if len(df) < 2:
-                print(f"[WARN] Not enough data for {symbol}")
+            update_cache(symbol, candle)
+            cache_file = os.path.join(DATA_CACHE, f"{symbol}.json")
+            if not os.path.exists(cache_file):
+                print(f"[WARN] Cache not found for {symbol}")
                 continue
 
-            X = compute_features(df)
-            model = joblib.load(cfg["model"])
-            y_pred = model.predict(X)[0]
+            data = json.load(open(cache_file))
+            df = pd.DataFrame(data)
+            if len(df) < 2:
+                print(f"[WARN] Not enough candles for {symbol}")
+                continue
 
+            model = joblib.load(model_path)
+            X = compute_features(df)
+            y_pred = model.predict(X)[0]
             last_close = df["close"].iloc[-1]
             delta = y_pred - last_close
-            if delta > 0:
-                decision = "BUY ✅"
-            elif delta < 0:
-                decision = "SELL ❌"
-            else:
-                decision = "HOLD ⚪"
+
+            decision = (
+                "BUY ✅" if delta > 0 else
+                "SELL ❌" if delta < 0 else
+                "HOLD ⚪"
+            )
 
             msg = (
-                f"{symbol}: {decision}\n"
-                f"Predicted next price: {round(y_pred, 4)}\n"
+                f"{symbol} → {decision}\n"
+                f"Predicted: {round(y_pred, 4)}\n"
                 f"Last close: {round(last_close, 4)}\n"
-                f"Δ = {round(delta, 4)}\n"
+                f"Δ: {round(delta, 4)}\n"
                 f"Time: {candle['timestamp']}"
             )
             print(msg)
             send_telegram_message(msg)
-
-            # brief delay to avoid rate-limit
             time.sleep(2)
 
         except Exception as e:
-            print(f"[ERROR] Failed {symbol}: {e}")
+            print(f"[ERROR] {symbol} failed: {e}")
+
+    print("[DONE] Alert cycle complete.\n")
 
 
 # -----------------------------------------------------
 # Main Entry
 # -----------------------------------------------------
 if __name__ == "__main__":
-    print('echo "[RUN] Executing crypto alert logic..."')
+    print('[RUN] Executing crypto alert logic...')
     run_alert_cycle()
-    print("[DONE] Alert cycle complete.")
