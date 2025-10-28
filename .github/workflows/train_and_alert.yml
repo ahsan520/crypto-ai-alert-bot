@@ -9,9 +9,19 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
 
+    env:
+      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      PYTHONUNBUFFERED: 1
+
     steps:
+      # === SETUP ===
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Ensure cache & model folders exist
+        run: |
+          mkdir -p data_cache models training_summary
+          echo "[SETUP] Directory structure ready."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -21,9 +31,10 @@ jobs:
       - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt || pip install requests pandas numpy yfinance joblib scikit-learn colorama
 
+      # === EXECUTION ===
       - name: Train AI Models
         run: |
           echo "[RUN] Starting model training..."
@@ -39,6 +50,7 @@ jobs:
           echo "[RUN] Executing crypto alert logic..."
           python crypto_ai_alert_v10.py
 
+      # === OUTPUT HANDLING ===
       - name: Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
@@ -51,6 +63,7 @@ jobs:
           name: telemetry_logs
           path: training_summary/
 
+      # === CLEANUP ===
       - name: Cleanup Old Telemetry Logs
         run: |
           echo "[RUN] Cleaning up old telemetry..."
