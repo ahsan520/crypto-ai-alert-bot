@@ -126,11 +126,11 @@ jobs:
           if [ -f "spike_predictor.py" ]; then
             echo "[INFO] ✅ Found spike_predictor.py — running..."
             python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
-          elif [ -f "utils/spike_predictor.py" ]; then
-            echo "[INFO] Found utils/spike_predictor.py — running..."
-            python utils/spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
+          elif [ -f "spike_predictor.py" ]; then
+            echo "[INFO] Found spike_predictor.py — running..."
+            python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
           else
-            echo "[❌ ERROR] spike_predictor.py not found in $(pwd) or utils/"
+            echo "[❌ ERROR] spike_predictor.py not found in $(pwd) or "
           fi
 
       # ---------------------------
@@ -144,11 +144,11 @@ jobs:
           if [ -f "crypto_ai_alert_v10.py" ]; then
             echo "[INFO] ✅ Found crypto_ai_alert_v10.py — running..."
             python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
-          elif [ -f "utils/crypto_ai_alert_v10.py" ]; then
-            echo "[INFO] Found utils/crypto_ai_alert_v10.py — running..."
-            python utils/crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          elif [ -f "crypto_ai_alert_v10.py" ]; then
+            echo "[INFO] Found crypto_ai_alert_v10.py — running..."
+            python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
           else
-            echo "[❌ ERROR] crypto_ai_alert_v10.py not found in root or utils/"
+            echo "[❌ ERROR] crypto_ai_alert_v10.py not found in root or "
           fi
 
       # ---------------------------
