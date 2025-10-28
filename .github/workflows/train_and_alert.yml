@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # allow the workflow to commit model updates
+  contents: write   # allow the workflow to commit model updates
   actions: read
 
 env:
-  USE_COINGECKO_DEMO: "true"  # Use demo API; set to false when switching to Pro
-  COINGECKO_API_KEY: ""       # Optional if demo mode is true
+  USE_COINGECKO_DEMO: "true"   # Use demo API; set to false for Pro
+  COINGECKO_API_KEY: ""        # Optional when demo=true
   PYTHONUNBUFFERED: "1"
 
 jobs:
@@ -19,71 +19,71 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repository
+      # 1️⃣ Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Step 2: Set up Python
+      # 2️⃣ Python setup
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # Step 3: Install dependencies
+      # 3️⃣ Dependencies
       - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Step 4: Ensure directories exist
+      # 4️⃣ Ensure folders
       - name: Ensure required folders exist
         run: |
-          echo "[INIT] Ensuring models and training_summary folders exist..."
+          echo "[INIT] Ensuring models, data_cache, and training_summary folders exist..."
           mkdir -p models training_summary data_cache
-          touch models/.gitkeep training_summary/.gitkeep
+          touch models/.gitkeep training_summary/.gitkeep data_cache/.gitkeep
 
-      # Step 5: Train AI models
+      # 5️⃣ Train
       - name: Train AI Models
         run: |
-          echo "[RUN] Starting model training..."
+          echo "[RUN] Starting AI model training..."
           python train_ai_model.py
 
-      # Step 6: Run spike predictor
+      # 6️⃣ Spike prediction
       - name: Run Spike Predictor
         run: |
           echo "[RUN] Running spike prediction engine..."
           python spike_predictor.py
 
-      # Step 7: Run alert logic (safe mode)
-      - name: Run Crypto AI Alert Logic (safe mode)
+      # 7️⃣ Alerts (safe mode)
+      - name: Run Crypto AI Alert Logic (Safe Mode)
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status"
+          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
 
-      # Step 8: Upload trained models (for inspection)
+      # 8️⃣ Artifacts (models)
       - name: Upload Trained Models
         uses: actions/upload-artifact@v4
         with:
           name: trained_models
           path: models/
 
-      # Step 9: Upload telemetry logs
+      # 9️⃣ Artifacts (telemetry)
       - name: Upload Telemetry Logs
         uses: actions/upload-artifact@v4
         with:
           name: telemetry_logs
           path: training_summary/
 
-      # Step 10: Cleanup old telemetry
+      # 🔟 Cleanup telemetry
       - name: Cleanup Old Telemetry Logs
         run: |
-          echo "[RUN] Cleaning up old telemetry..."
-          python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped"
+          echo "[RUN] Cleaning up old telemetry logs..."
+          python telemetry_cleanup.py || echo "[WARN] Telemetry cleanup skipped."
 
-      # Step 11: Commit & push model updates
+      # 1️⃣1️⃣ Commit & push updates
       - name: Commit and push updated models
         run: |
           echo "[GIT] Committing and pushing trained models..."
@@ -91,7 +91,7 @@ jobs:
           git config --global user.name "GitHub Actions Bot"
           git add models/ training_summary/
           if git diff --cached --quiet; then
-            echo "[INFO] No changes to commit."
+            echo "[INFO] No changes detected, skipping commit."
           else
             git commit -m "Auto-update: AI model training artifacts [skip ci]"
             git push origin main
