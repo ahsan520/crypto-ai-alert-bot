@@ -144,20 +144,20 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 9️⃣ Clean and Upload Telemetry Logs
+      # 9️⃣ Cleanup + Upload Telemetry Logs
       # ---------------------------
-      - name: 🧹 Clean Telemetry Logs (spike summaries + old logs)
+      - name: 🧹 Remove spike_train_summar* telemetry files (keep last 3)
         run: |
-          echo "[CLEANUP] Starting telemetry cleanup..."
-          if [ -d "telemetry_logs" ]; then
-            echo "[INFO] Keeping only last 3 spike_train_summary files..."
-            ls -t telemetry_logs/spike_train_summary_* 2>/dev/null | tail -n +4 | xargs -r rm -f
-            echo "[INFO] Running telemetry_cleanup.py for per-symbol retention..."
-            python3 telemetry_cleanup.py || echo "[WARN] telemetry_cleanup.py failed, continuing..."
-            echo "[DONE] Telemetry cleanup complete."
+          echo "[CLEANUP] Keeping last 3 spike_train_summar* files..."
+          mkdir -p telemetry_logs
+          files=( $(ls -t telemetry_logs/spike_train_summar* 2>/dev/null || true) )
+          if [ ${#files[@]} -gt 3 ]; then
+            echo "[DELETE] Removing ${files[@]:3}"
+            rm -f "${files[@]:3}"
           else
-            echo "[INFO] telemetry_logs directory not found, skipping cleanup."
+            echo "[OK] Fewer than 3 files, nothing to remove."
           fi
+          echo "[DONE] Retained last 3 summaries."
 
       - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
@@ -165,7 +165,6 @@ jobs:
           name: telemetry_logs
           path: telemetry_logs/
           retention-days: 7
-
 
       # ---------------------------
       # 🔟 🧹 Remove Old Workflow Runs (keep last 2)
