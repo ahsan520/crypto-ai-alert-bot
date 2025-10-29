@@ -1,15 +1,15 @@
 {
   "symbol": "GALAUSDT",
-  "timestamp_utc": "2025-10-27T20:47:39.466505Z",
-  "hybrid_ai_signal": "buy",
-  "spike_forecast": "Likely spike",
-  "final_action": "strong_buy",
-  "confidence": 0.65,
+  "timestamp_utc": "2025-10-27T21:47:39.466153Z",
+  "hybrid_ai_signal": "hold",
+  "spike_forecast": "Stable",
+  "final_action": "hold",
+  "confidence": 0.7,
   "reason": {
     "summary": "Placeholder reason",
     "details": {
-      "rsi": 32,
-      "macd": 0.003
+      "rsi": 31,
+      "macd": 0.002
     }
   }
 }
