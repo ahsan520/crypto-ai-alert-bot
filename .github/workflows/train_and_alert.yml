@@ -161,11 +161,19 @@ jobs:
       # ---------------------------
       # 9️⃣ Upload Telemetry Logs
       # ---------------------------
-      - name: 🧹 Remove spike_train_summar* telemetry files
+
+      - name: 🧹 Clean Telemetry Logs (includes spike summaries)
         run: |
-          echo "[CLEANUP] Removing spike_train_summar* files from telemetry_logs..."
-          find telemetry_logs -type f -name "spike_train_summar*" -exec rm -f {} \;
-          echo "[DONE] Removed matching files."
+          echo "[CLEANUP] Starting telemetry cleanup..."
+          if [ -d "telemetry_logs" ]; then
+            echo "[INFO] Removing old spike_train_summar* files..."
+            find telemetry_logs -type f -name "spike_train_summar*" -exec rm -f {} \;
+            echo "[INFO] Running telemetry_cleanup.py for log retention..."
+            python3 telemetry_cleanup.py || echo "[WARN] Cleanup script failed, continuing..."
+            echo "[DONE] Telemetry cleanup complete — includes spike summary trimming."
+          else
+            echo "[INFO] telemetry_logs directory not found, skipping cleanup."
+          fi
 
       - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
@@ -173,6 +181,7 @@ jobs:
           name: telemetry_logs
           path: telemetry_logs/
           retention-days: 7
+
 
 
       # ---------------------------
