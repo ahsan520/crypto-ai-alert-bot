@@ -151,7 +151,19 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 🔟 Commit and Push Models + Telemetry
+      # 🔟 🧹 Run Telemetry Cleanup (new)
+      # ---------------------------
+      - name: 🧹 Run Telemetry Cleanup
+        run: |
+          echo "[CLEANUP] Removing telemetry logs older than 7 days..."
+          if [ -f "telemetry_cleanup.py" ]; then
+            python telemetry_cleanup.py || echo "[WARN] Cleanup encountered an issue."
+          else
+            echo "[WARN] telemetry_cleanup.py not found — skipping cleanup."
+          fi
+
+      # ---------------------------
+      # 11️⃣ Commit and Push Models + Telemetry
       # ---------------------------
       - name: 🪶 Commit and Push Models + Telemetry
         env:
