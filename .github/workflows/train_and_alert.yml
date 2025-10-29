@@ -131,10 +131,10 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          if [ -f "crypto_ai_alert_v11.py" ]; then
-            python crypto_ai_alert_v11.py || echo "[WARN] Alert logic exited with non-zero status."
+          if [ -f "crypto_ai_alert_v10.py" ]; then
+            python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
           else
-            echo "[❌ ERROR] crypto_ai_alert_v11.py not found!"
+            echo "[❌ ERROR] crypto_ai_alert_v10.py not found!"
           fi
 
       # ---------------------------
