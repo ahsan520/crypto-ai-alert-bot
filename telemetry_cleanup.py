@@ -3,15 +3,17 @@
 # -----------------------------------------------------
 # 🔍 Purpose:
 #   Clean up old telemetry logs, keeping the latest N per symbol.
-#   Also trims spike_train_summary* logs to the latest N.
-#   Ensures telemetry_logs directory doesn't grow indefinitely.
+#   Also trims spike_train_summary* logs:
+#     - Removes any older than 2 hours.
+#     - Keeps only the last N newest ones.
 # -----------------------------------------------------
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 LOG_DIR = "telemetry_logs"
 KEEP = 3  # Keep last 3 logs per symbol and spike summaries
+SPIKE_TTL_HOURS = 2  # Delete spike_train_summary_* older than 2 hours
 
 
 def parse_timestamp(filename: str):
@@ -46,6 +48,7 @@ def cleanup():
     files_by_symbol = {}
     spike_files = []
     total_deleted = 0
+    now = datetime.now()
 
     # 🧭 Classify files
     for f in os.listdir(LOG_DIR):
@@ -62,7 +65,19 @@ def cleanup():
         symbol = parts[0]
         files_by_symbol.setdefault(symbol, []).append(f)
 
-    # 🧹 Clean symbol-specific telemetry
+    # 🧹 Step 1: Delete spike_train_summary older than TTL
+    for f in list(spike_files):
+        try:
+            ftime = parse_timestamp(f)
+            if ftime and now - ftime > timedelta(hours=SPIKE_TTL_HOURS):
+                os.remove(os.path.join(LOG_DIR, f))
+                total_deleted += 1
+                spike_files.remove(f)
+                print(f"[CLEAN] Deleted old spike summary (> {SPIKE_TTL_HOURS}h): {f}")
+        except Exception as e:
+            print(f"[WARN] Could not delete spike summary {f}: {e}")
+
+    # 🧹 Step 2: Clean symbol-specific telemetry (keep last N)
     for sym, files in files_by_symbol.items():
         if len(files) <= KEEP:
             continue
@@ -76,7 +91,7 @@ def cleanup():
             except Exception as e:
                 print(f"[WARN] Could not delete {f}: {e}")
 
-    # 🧹 Clean spike_train_summary files
+    # 🧹 Step 3: Clean spike_train_summary by count (keep last N)
     if len(spike_files) > KEEP:
         spike_sorted = sorted(spike_files, key=parse_timestamp)
         to_delete = spike_sorted[:-KEEP]
@@ -84,7 +99,7 @@ def cleanup():
             try:
                 os.remove(os.path.join(LOG_DIR, f))
                 total_deleted += 1
-                print(f"[CLEAN] Removed old spike summary: {f}")
+                print(f"[CLEAN] Trimmed old spike summary: {f}")
             except Exception as e:
                 print(f"[WARN] Could not delete spike summary {f}: {e}")
 
