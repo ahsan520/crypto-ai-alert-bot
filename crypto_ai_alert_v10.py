@@ -58,9 +58,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or CONF.get("telegram_chat_id")
 # email fallback configuration via secrets (recommended)
 EMAIL_HOST = os.getenv("EMAIL_HOST") or CONF.get("email", {}).get("host")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT") or CONF.get("email", {}).get("port", 587) or 587)
-EMAIL_USER = os.getenv("EMAIL_USER") or CONF.get("email", {}).get("user")
-EMAIL_PASS = os.getenv("EMAIL_PASS") or CONF.get("email", {}).get("pass")
-EMAIL_TO = os.getenv("EMAIL_TO") or CONF.get("email", {}).get("to")
+EMAIL_USER = os.getenv("EMAIL_USERNAME") or CONF.get("email", {}).get("user")
+EMAIL_PASS = os.getenv("EMAIL_PASSWORD") or CONF.get("email", {}).get("pass")
+EMAIL_TO = os.getenv("EMAIL_USERNAME") or CONF.get("email", {}).get("to")
 
 MAX_MODEL_AGE_HRS = int(CONF.get("max_model_age_hours", 2))
 
