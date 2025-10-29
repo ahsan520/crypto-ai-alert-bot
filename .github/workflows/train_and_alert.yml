@@ -146,12 +146,11 @@ jobs:
       # ---------------------------
       # 9️⃣ Cleanup + Upload Telemetry Logs
       # ---------------------------
-      - name: 🧹 Remove old spike_train_summary files (keep last 3)
+      - name: 🧹 Run Telemetry Cleanup Script
         run: |
-          echo "[CLEANUP] Keeping last 3 spike_train_summary* files..."
-          mkdir -p telemetry_logs
-          find telemetry_logs -type f -name "spike_train_summar*" | sort -r | tail -n +4 | xargs -r rm -f
-          echo "[DONE] Retained last 3 summaries."
+          echo "[CLEANUP] Running telemetry_cleanup.py..."
+          python telemetry_cleanup.py
+          echo "[DONE] Telemetry cleanup complete."
 
       - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
