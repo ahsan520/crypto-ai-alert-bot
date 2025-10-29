@@ -41,7 +41,7 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-            
+
       - name: Install dependencies
         run: |
           echo "[SETUP] Installing Python dependencies..."
@@ -130,7 +130,7 @@ jobs:
           ls -lh models/spike_trend || echo "[WARN] No spike packs found."
 
       # ---------------------------
-      # 7️⃣ Run Crypto AI Alert Logic (v11) with secrets
+      # 7️⃣ Run Crypto AI Alert Logic (v11)
       # ---------------------------
       - name: 🚨 Run Crypto AI Alert Logic (v11)
         env:
@@ -161,7 +161,6 @@ jobs:
       # ---------------------------
       # 9️⃣ Upload Telemetry Logs
       # ---------------------------
-
       - name: 🧹 Clean Telemetry Logs (includes spike summaries)
         run: |
           echo "[CLEANUP] Starting telemetry cleanup..."
@@ -182,19 +181,33 @@ jobs:
           path: telemetry_logs/
           retention-days: 7
 
-
-
       # ---------------------------
-      # 🔟 🧹 Run Telemetry Cleanup
+      # 🔁 Cache & Artifact Cleanup
       # ---------------------------
-      - name: 🧹 Run Telemetry Cleanup
+      - name: 🧹 Prune old pip caches (keep latest 1)
+        if: ${{ github.ref == 'refs/heads/main' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[CLEANUP] Removing telemetry logs older than 7 days..."
-          if [ -f "telemetry_cleanup.py" ]; then
-            python telemetry_cleanup.py || echo "[WARN] Cleanup encountered an issue."
-          else
-            echo "[WARN] telemetry_cleanup.py not found — skipping cleanup."
-          fi
+          echo "[CLEANUP] Pruning pip caches..."
+          gh cache list --sort created-at --order desc --limit 50 --json id,key \
+            --jq '. | map(select(.key | contains("pip"))) | .[1:] | .[].id' | while read cache_id; do
+              echo "[DELETE] Removing old pip cache $cache_id"
+              gh cache delete $cache_id || true
+            done
+          echo "[DONE] Retained latest pip cache only."
+
+      - name: 🧽 Cleanup old workflow artifacts (keep last 2)
+        if: ${{ github.ref == 'refs/heads/main' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "[CLEANUP] Removing old workflow artifacts..."
+          gh run list --limit 50 --json databaseId --jq '.[2:] | .[].databaseId' | while read run_id; do
+            echo "[DELETE] Removing old workflow run $run_id"
+            gh run delete $run_id || true
+          done
+          echo "[DONE] Retained last 2 workflow artifacts only."
 
       # ---------------------------
       # 11️⃣ Commit and Push Models + Telemetry
