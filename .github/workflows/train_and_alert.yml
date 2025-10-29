@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write   # ✅ needed for deleting old runs/artifacts
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -40,7 +40,7 @@ jobs:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-pip-  # ✅ keeps only 1 copy per OS hash
 
       - name: Install dependencies
         run: |
@@ -54,7 +54,6 @@ jobs:
       # ---------------------------
       - name: 🗂 Prepare required folders
         run: |
-          echo "[INIT] Ensuring all required folders exist..."
           mkdir -p models data_cache telemetry_logs utils training_summary models/spike_trend
 
       # ---------------------------
@@ -71,8 +70,6 @@ jobs:
             echo "[❌ ERROR] data_fetcher.py not found!"
             exit 1
           fi
-          echo "[INFO] Data cache created:"
-          ls -lh data_cache || echo "[WARN] No cache created."
 
       # ---------------------------
       # 4️⃣ Check model freshness
@@ -100,16 +97,13 @@ jobs:
           done
 
           echo "needs_training=$needs_training" >> $GITHUB_ENV
-          echo "[RESULT] Training needed: $needs_training"
 
       # ---------------------------
       # 5️⃣ Train AI Models Conditionally
       # ---------------------------
       - name: 🧠 Train AI Models
         if: env.needs_training == 'true'
-        run: |
-          echo "[TRAIN] Starting model training..."
-          python train_ai_model.py || echo "[WARN] Training script encountered an issue."
+        run: python train_ai_model.py || echo "[WARN] Training script encountered an issue."
 
       - name: ✅ Skip Training (Models Fresh)
         if: env.needs_training == 'false'
@@ -121,11 +115,7 @@ jobs:
       - name: ⚡ Run Spike Predictor
         run: |
           echo "[RUN] Executing spike predictor..."
-          if [ -f "spike_predictor.py" ]; then
-            python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
-          else
-            echo "[❌ ERROR] spike_predictor.py not found!"
-          fi
+          python spike_predictor.py || echo "[WARN] Spike predictor exited with non-zero status."
           echo "[INFO] Spike packs in models/spike_trend:"
           ls -lh models/spike_trend || echo "[WARN] No spike packs found."
 
@@ -141,12 +131,7 @@ jobs:
           EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
-          echo "[RUN] Executing crypto alert logic..."
-          if [ -f "crypto_ai_alert_v10.py" ]; then
-            python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
-          else
-            echo "[❌ ERROR] crypto_ai_alert_v10.py not found!"
-          fi
+          python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
 
       # ---------------------------
       # 8️⃣ Upload Trained Models
@@ -159,19 +144,14 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 9️⃣ Upload Telemetry Logs
+      # 9️⃣ Upload Telemetry Logs (keep 3 spike summaries)
       # ---------------------------
       - name: 🧹 Clean Telemetry Logs (includes spike summaries)
         run: |
-          echo "[CLEANUP] Starting telemetry cleanup..."
+          echo "[CLEANUP] Keeping only last 3 spike_train_summar files..."
           if [ -d "telemetry_logs" ]; then
-            echo "[INFO] Removing old spike_train_summar* files..."
-            find telemetry_logs -type f -name "spike_train_summar*" -exec rm -f {} \;
-            echo "[INFO] Running telemetry_cleanup.py for log retention..."
-            python3 telemetry_cleanup.py || echo "[WARN] Cleanup script failed, continuing..."
-            echo "[DONE] Telemetry cleanup complete — includes spike summary trimming."
-          else
-            echo "[INFO] telemetry_logs directory not found, skipping cleanup."
+            ls -t telemetry_logs/spike_train_summar* 2>/dev/null | tail -n +4 | xargs -r rm -f
+            python3 telemetry_cleanup.py || echo "[WARN] telemetry_cleanup.py failed."
           fi
 
       - name: 📊 Upload Telemetry Logs
@@ -182,32 +162,18 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 🔁 Cache & Artifact Cleanup
+      # 🔟 🧹 Remove Old Workflow Runs (keep last 2)
       # ---------------------------
-      - name: 🧹 Prune old pip caches (keep latest 1)
-        if: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "[CLEANUP] Pruning pip caches..."
-          gh cache list --sort created-at --order desc --limit 50 --json id,key \
-            --jq '. | map(select(.key | contains("pip"))) | .[1:] | .[].id' | while read cache_id; do
-              echo "[DELETE] Removing old pip cache $cache_id"
-              gh cache delete $cache_id || true
-            done
-          echo "[DONE] Retained latest pip cache only."
-
-      - name: 🧽 Cleanup old workflow artifacts (keep last 2)
-        if: ${{ github.ref == 'refs/heads/main' }}
+      - name: 🧹 Cleanup Old Workflow Runs
+        if: github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "[CLEANUP] Removing old workflow artifacts..."
-          gh run list --limit 50 --json databaseId --jq '.[2:] | .[].databaseId' | while read run_id; do
+          gh run list --limit 10 --json databaseId --jq '.[2:] | .[].databaseId' | while read run_id; do
             echo "[DELETE] Removing old workflow run $run_id"
-            gh run delete $run_id || true
+            gh api repos/${{ github.repository }}/actions/runs/$run_id -X DELETE || echo "[WARN] Could not delete run $run_id"
           done
-          echo "[DONE] Retained last 2 workflow artifacts only."
 
       # ---------------------------
       # 11️⃣ Commit and Push Models + Telemetry
@@ -216,7 +182,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[GIT] Saving models and telemetry logs..."
           git config user.email "actions@github.com"
           git config user.name "github-actions[bot]"
           git add -f models/*.pkl models/spike_trend/*.pkl telemetry_logs/*.json data_cache/* training_summary/* || true
