@@ -52,7 +52,7 @@ SPIKE_CONF_THRESH = float(CONF.get("spike_confidence_threshold", 0.6))
 ASSUMED_SPIKE_PCT = float(CONF.get("assumed_spike_pct", 2.5))  # percent used to estimate magnitude from prob
 
 # env for notifications (prefer GitHub secrets, else config.json)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or CONF.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or CONF.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or CONF.get("telegram_chat_id")
 
 # email fallback configuration via secrets (recommended)
