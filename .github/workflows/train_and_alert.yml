@@ -119,15 +119,22 @@ jobs:
           ls -lh models/spike_trend || echo "[WARN] No spike packs found."
 
       # ---------------------------
-      # 7️⃣ Run Crypto AI Alert Logic (v10)
+      # 7️⃣ Run Crypto AI Alert Logic (v11) with secrets
       # ---------------------------
-      - name: 🚨 Run Crypto AI Alert Logic (v10)
+      - name: 🚨 Run Crypto AI Alert Logic (v11)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
         run: |
           echo "[RUN] Executing crypto alert logic..."
-          if [ -f "crypto_ai_alert_v10.py" ]; then
-            python crypto_ai_alert_v10.py || echo "[WARN] Alert logic exited with non-zero status."
+          if [ -f "crypto_ai_alert_v11.py" ]; then
+            python crypto_ai_alert_v11.py || echo "[WARN] Alert logic exited with non-zero status."
           else
-            echo "[❌ ERROR] crypto_ai_alert_v10.py not found!"
+            echo "[❌ ERROR] crypto_ai_alert_v11.py not found!"
           fi
 
       # ---------------------------
@@ -151,7 +158,7 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 🔟 🧹 Run Telemetry Cleanup (new)
+      # 🔟 🧹 Run Telemetry Cleanup
       # ---------------------------
       - name: 🧹 Run Telemetry Cleanup
         run: |
