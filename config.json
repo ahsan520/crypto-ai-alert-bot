@@ -4,24 +4,32 @@
     "XRPUSDT",
     "GALAUSDT"
   ],
+
   "interval": "1h",
   "lookback_days": 30,
   "model_dir": "models",
   "cache_dir": "data_cache",
   "model_version": "v13_hybrid",
   "use_spike_predictor_in_alerts": true,
+
   "spike_confidence_threshold": 0.6,
+  "spike_window": 3,
+  "assumed_spike_pct": 2.5,
+
   "alert_probability_thresholds": {
     "buy": 0.7,
     "sell": 0.3
   },
+
   "telemetry": {
     "enable_console_log": true,
     "enable_telegram_alerts": true,
     "enable_dashboard_stream": true,
     "save_json_artifacts": true,
-    "reason_mode": "adaptive"
+    "reason_mode": "adaptive",
+    "log_dir": "telemetry_logs"
   },
+
   "telemetry_viewer": {
     "enable_streamlit_ui": true,
     "enable_cli_mode": true,
@@ -29,8 +37,21 @@
     "show_charts": true,
     "refresh_interval_sec": 60
   },
+
   "github_artifact_policy": "always_upload",
   "max_log_age_days": 30,
   "train_schedule": "0 0 * * *",
-  "alert_interval_minutes": 30
+  "alert_interval_minutes": 30,
+  "max_model_age_hours": 2,
+
+  "telegram_token": "",
+  "telegram_chat_id": "",
+
+  "email": {
+    "host": "smtp.gmail.com",
+    "port": 587,
+    "user": "",
+    "pass": "",
+    "to": ""
+  }
 }
