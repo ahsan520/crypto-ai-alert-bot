@@ -40,7 +40,7 @@ jobs:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-  # ✅ keeps only 1 copy per OS hash
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
@@ -50,11 +50,17 @@ jobs:
           pip install yfinance pandas numpy scikit-learn requests joblib matplotlib seaborn pycoingecko ccxt
 
       # ---------------------------
-      # 2️⃣ Prepare required folders
+      # 2️⃣ Prepare required folders + Pre-Cleanup
       # ---------------------------
       - name: 🗂 Prepare required folders
         run: |
           mkdir -p models data_cache telemetry_logs utils training_summary models/spike_trend
+
+      - name: 🧹 Pre-Cleanup Old Telemetry Logs
+        run: |
+          echo "[PRE-CLEANUP] Running telemetry_cleanup.py before fetching new data..."
+          python telemetry_cleanup.py || echo "[WARN] Pre-cleanup encountered a non-critical issue."
+          echo "[DONE] Old logs removed before new fetch and training."
 
       # ---------------------------
       # 3️⃣ Run Multi-Source Data Fetcher
@@ -144,13 +150,13 @@ jobs:
           retention-days: 7
 
       # ---------------------------
-      # 9️⃣ Cleanup + Upload Telemetry Logs
+      # 9️⃣ Post-Cleanup + Upload Telemetry Logs
       # ---------------------------
-      - name: 🧹 Run Telemetry Cleanup Script
+      - name: 🧹 Post-Cleanup Telemetry Logs
         run: |
-          echo "[CLEANUP] Running telemetry_cleanup.py..."
-          python telemetry_cleanup.py
-          echo "[DONE] Telemetry cleanup complete."
+          echo "[POST-CLEANUP] Running telemetry_cleanup.py after full processing..."
+          python telemetry_cleanup.py || echo "[WARN] Post-cleanup encountered a non-critical issue."
+          echo "[DONE] Logs trimmed and folder cleaned after run."
 
       - name: 📊 Upload Telemetry Logs
         uses: actions/upload-artifact@v4
