@@ -12,31 +12,35 @@ import os
 from datetime import datetime, timedelta
 
 LOG_DIR = "telemetry_logs"
-KEEP = 3  # Keep last 3 logs per symbol and spike summaries
-SPIKE_TTL_HOURS = 2  # Delete spike_train_summary_* older than 2 hours
+KEEP = 3
+SPIKE_TTL_HOURS = 2
 
 
 def parse_timestamp(filename: str):
-    """Extract a sortable timestamp from multiple filename formats."""
+    """Extract a timestamp from various filename formats."""
     path = os.path.join(LOG_DIR, filename)
     try:
-        # ✅ Case 1: spike_train_summary_20251028_044035.json
-        if filename.startswith("spike_train_summary"):
-            parts = filename.replace(".json", "").split("_")
-            if len(parts) >= 5:
-                date_str = parts[-2] + parts[-1]  # 20251028 + 044035
-                return datetime.strptime(date_str, "%Y%m%d%H%M%S")
+        name = filename.replace(".json", "")
+        parts = name.split("_")
 
-        # ✅ Case 2: BTCUSDT_2025-10-28_08-30-15.json
-        parts = filename.replace(".json", "").split("_")
-        if len(parts) >= 3:
+        # Case 1: spike_train_summary_20251028_044035.json or with symbol
+        if "spike" in parts and "summary" in parts:
+            for i, p in enumerate(parts):
+                if p.isdigit() and len(p) == 8 and i + 1 < len(parts):
+                    nextp = parts[i + 1]
+                    if nextp.isdigit() and len(nextp) == 6:
+                        date_str = p + nextp
+                        return datetime.strptime(date_str, "%Y%m%d%H%M%S")
+
+        # Case 2: BTCUSDT_2025-10-28_08-30-15.json
+        if len(parts) >= 3 and "-" in parts[1]:
             date_str = "_".join(parts[1:3])
             return datetime.strptime(date_str, "%Y-%m-%d_%H-%M-%S")
 
     except Exception:
         pass
 
-    # 🕒 Fallback: file modified time
+    # Fallback to file modified time
     return datetime.fromtimestamp(os.path.getmtime(path))
 
 
@@ -45,65 +49,57 @@ def cleanup():
         print("[INFO] telemetry_logs folder missing, skipping cleanup.")
         return
 
-    files_by_symbol = {}
-    spike_files = []
-    total_deleted = 0
     now = datetime.now()
+    total_deleted = 0
+    spike_files, files_by_symbol = [], {}
 
-    # 🧭 Classify files
+    # Classify files
     for f in os.listdir(LOG_DIR):
         if not f.endswith(".json"):
             continue
-
         if f.startswith("spike_train_summary"):
             spike_files.append(f)
-            continue
+        else:
+            sym = f.split("_")[0]
+            files_by_symbol.setdefault(sym, []).append(f)
 
-        parts = f.split("_")
-        if len(parts) < 2:
-            continue
-        symbol = parts[0]
-        files_by_symbol.setdefault(symbol, []).append(f)
-
-    # 🧹 Step 1: Delete spike_train_summary older than TTL
-    for f in list(spike_files):
+    # Step 1: Delete spike summaries older than TTL
+    for f in spike_files[:]:
         try:
             ftime = parse_timestamp(f)
-            if ftime and now - ftime > timedelta(hours=SPIKE_TTL_HOURS):
+            age = now - ftime
+            if age > timedelta(hours=SPIKE_TTL_HOURS):
                 os.remove(os.path.join(LOG_DIR, f))
-                total_deleted += 1
                 spike_files.remove(f)
-                print(f"[CLEAN] Deleted old spike summary (> {SPIKE_TTL_HOURS}h): {f}")
+                total_deleted += 1
+                print(f"[CLEAN] Deleted spike summary ({age.total_seconds()/3600:.1f}h old): {f}")
         except Exception as e:
             print(f"[WARN] Could not delete spike summary {f}: {e}")
 
-    # 🧹 Step 2: Clean symbol-specific telemetry (keep last N)
+    # Step 2: Keep last N per symbol
     for sym, files in files_by_symbol.items():
-        if len(files) <= KEEP:
-            continue
-        files_sorted = sorted(files, key=parse_timestamp)
-        to_delete = files_sorted[:-KEEP]
-        for f in to_delete:
-            try:
-                os.remove(os.path.join(LOG_DIR, f))
-                total_deleted += 1
-                print(f"[CLEAN] Removed old telemetry for {sym}: {f}")
-            except Exception as e:
-                print(f"[WARN] Could not delete {f}: {e}")
+        if len(files) > KEEP:
+            files_sorted = sorted(files, key=parse_timestamp)
+            for f in files_sorted[:-KEEP]:
+                try:
+                    os.remove(os.path.join(LOG_DIR, f))
+                    total_deleted += 1
+                    print(f"[CLEAN] Removed old telemetry for {sym}: {f}")
+                except Exception as e:
+                    print(f"[WARN] Could not delete {f}: {e}")
 
-    # 🧹 Step 3: Clean spike_train_summary by count (keep last N)
+    # Step 3: Trim spike summaries by count (keep last N)
     if len(spike_files) > KEEP:
         spike_sorted = sorted(spike_files, key=parse_timestamp)
-        to_delete = spike_sorted[:-KEEP]
-        for f in to_delete:
+        for f in spike_sorted[:-KEEP]:
             try:
                 os.remove(os.path.join(LOG_DIR, f))
                 total_deleted += 1
-                print(f"[CLEAN] Trimmed old spike summary: {f}")
+                print(f"[CLEAN] Trimmed spike summary by count: {f}")
             except Exception as e:
                 print(f"[WARN] Could not delete spike summary {f}: {e}")
 
-    print(f"[DONE] Telemetry cleanup complete — kept last {KEEP} per symbol & spike summaries, removed {total_deleted} old logs.")
+    print(f"[DONE] Cleanup complete — {total_deleted} files deleted, kept last {KEEP} per symbol and spike summaries.")
 
 
 if __name__ == "__main__":
