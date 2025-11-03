@@ -3,6 +3,7 @@
 crypto_ai_alert_v11.py
 Unified alert runner — AI regression + spike predictor fusion.
 Sends unified Telegram alerts (BUY/SELL) and falls back to email via SMTP.
+Also detects ±5% price movements and emails those alerts only.
 Writes enriched telemetry (keeps last 3 files per symbol: _0,_1,_2).
 """
 
@@ -22,7 +23,6 @@ from email.message import EmailMessage
 try:
     from utils.data_fetcher import get_data, CACHE_DIR
 except Exception:
-    # if utils package not present fall back to local dir expectation
     from data_fetcher import get_data  # noqa
     CACHE_DIR = "data_cache"
 
@@ -49,7 +49,8 @@ os.makedirs(SPIKE_DIR, exist_ok=True)
 TH_BUY = CONF.get("alert_probability_thresholds", {}).get("buy", 0.7)
 TH_SELL = CONF.get("alert_probability_thresholds", {}).get("sell", 0.3)
 SPIKE_CONF_THRESH = float(CONF.get("spike_confidence_threshold", 0.6))
-ASSUMED_SPIKE_PCT = float(CONF.get("assumed_spike_pct", 2.5))  # percent used to estimate magnitude from prob
+ASSUMED_SPIKE_PCT = float(CONF.get("assumed_spike_pct", 2.5))
+PRICE_ALERT_PCT = float(CONF.get("price_change_alert_pct", 5.0))  # configurable ±% price change alert
 
 # env for notifications (prefer GitHub secrets, else config.json)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or CONF.get("telegram_token") or os.getenv("TELEGRAM_TOKEN")
@@ -60,7 +61,7 @@ EMAIL_HOST = os.getenv("EMAIL_HOST") or CONF.get("email", {}).get("host")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT") or CONF.get("email", {}).get("port", 587) or 587)
 EMAIL_USER = os.getenv("EMAIL_USERNAME") or CONF.get("email", {}).get("user")
 EMAIL_PASS = os.getenv("EMAIL_PASSWORD") or CONF.get("email", {}).get("pass")
-EMAIL_TO = os.getenv("EMAIL_USERNAME") or CONF.get("email", {}).get("to")
+EMAIL_TO = os.getenv("EMAIL_TO") or CONF.get("email", {}).get("to") or EMAIL_USER
 
 MAX_MODEL_AGE_HRS = int(CONF.get("max_model_age_hours", 2))
 
@@ -83,13 +84,11 @@ def read_cache_csv(symbol):
     return pd.DataFrame()
 
 def ensure_cache(symbol):
-    """Ensure data_cache has a CSV for symbol. If missing or too small, call get_data to fetch."""
     path = os.path.join(CACHE_DIR, f"{symbol}.csv")
     if not os.path.exists(path) or os.path.getsize(path) < 2000:
         logging.info(f"Cache missing/small for {symbol}, fetching via get_data()")
         try:
             df = get_data(symbol)
-            # get_data already caches via data_fetcher._cache if successful
             return df
         except Exception as e:
             logging.warning(f"get_data failed for {symbol}: {e}")
@@ -126,7 +125,6 @@ def load_spike_pack(symbol):
         return None, path
 
 def featurize_for_ai(df):
-    """Return last row with features [open, high, low, close, volume]"""
     if df is None or df.empty:
         return None
     d = df.sort_values("timestamp").tail(1)
@@ -134,7 +132,6 @@ def featurize_for_ai(df):
         X = d[["open", "high", "low", "close", "volume"]].astype(float).values
         return X, float(d["close"].iloc[-1])
     except Exception:
-        # try with numeric coercion
         for c in ["open","high","low","close","volume"]:
             if c in d.columns:
                 d[c] = pd.to_numeric(d[c], errors="coerce")
@@ -145,11 +142,9 @@ def featurize_for_ai(df):
         return X, float(d["close"].iloc[-1])
 
 def featurize_for_spike(df, features):
-    """Build feature vector for spike model (features list from pack)."""
     if df is None or df.empty:
         return None
     df = df.sort_values("timestamp").reset_index(drop=True)
-    # compute required features (return, vol_change, rsi, macd)
     temp = df.copy()
     temp["close"] = pd.to_numeric(temp["close"], errors="coerce")
     temp["open"] = pd.to_numeric(temp["open"], errors="coerce")
@@ -163,17 +158,11 @@ def featurize_for_spike(df, features):
     ema26 = temp["close"].ewm(span=26, adjust=False).mean()
     temp["macd"] = ema12 - ema26
     last = temp.tail(1)
-    # ensure order matches features
-    X = []
-    for f in features:
-        if f in last.columns:
-            X.append(float(last[f].iloc[0]))
-        else:
-            X.append(0.0)
+    X = [float(last.get(f, pd.Series([0])).iloc[0]) for f in features]
     return np.array(X).reshape(1, -1)
 
 # -------------------------------
-# Notification (Telegram primary, Email fallback)
+# Notification
 # -------------------------------
 def send_telegram(message_text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -212,23 +201,49 @@ def send_email(subject, body):
         return False, str(e)
 
 # -------------------------------
+# Email-only ±5% price change detector
+# -------------------------------
+def check_price_change_and_alert(symbol, df, threshold_pct=PRICE_ALERT_PCT):
+    """Send email alert if price changes ±threshold_pct between last two closes."""
+    if df is None or len(df) < 2:
+        return
+    df = df.sort_values("timestamp")
+    last_close = float(df["close"].iloc[-1])
+    prev_close = float(df["close"].iloc[-2])
+    change_pct = ((last_close - prev_close) / prev_close) * 100.0
+    if abs(change_pct) >= threshold_pct:
+        direction = "UP" if change_pct > 0 else "DOWN"
+        subject = f"⚠️ {symbol} moved {direction} {abs(change_pct):.2f}%"
+        body = (
+            f"{symbol} price alert (±{threshold_pct}% threshold)\n\n"
+            f"Previous close: {prev_close:.6f}\n"
+            f"Current close:  {last_close:.6f}\n"
+            f"Change: {change_pct:+.2f}%\n"
+            f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+            f"— Crypto/Stock AI Alert System"
+        )
+        logging.info(f"{symbol} exceeded {threshold_pct}% move ({change_pct:+.2f}%) — sending email alert.")
+        ok, resp = send_email(subject, body)
+        if ok:
+            logging.info(f"Email alert sent for {symbol}: {subject}")
+        else:
+            logging.warning(f"Email alert failed for {symbol}: {resp}")
+
+# -------------------------------
 # Telemetry rotation (keep 3)
 # -------------------------------
 def rotate_and_write_telemetry(symbol, record):
     base = os.path.join(TELEMETRY_DIR, symbol)
-    # names: symbol_0.json (most recent), _1, _2
     f0 = f"{base}_0.json"
     f1 = f"{base}_1.json"
     f2 = f"{base}_2.json"
     try:
-        # remove f2, move f1->f2, f0->f1
         if os.path.exists(f1):
             if os.path.exists(f2):
                 os.remove(f2)
             os.rename(f1, f2)
         if os.path.exists(f0):
             os.rename(f0, f1)
-        # write new f0
         with open(f0, "w") as fh:
             json.dump(record, fh, default=str, indent=2)
         logging.info(f"Telemetry saved: {f0}")
@@ -239,16 +254,7 @@ def rotate_and_write_telemetry(symbol, record):
 # Fusion logic
 # -------------------------------
 def fuse_decision(ai_action, ai_conf, spike_forecast, spike_prob, spike_pct_est):
-    """
-    Return final_action: one of strong_buy, buy, strong_sell, sell, hold.
-    Simple heuristic:
-    - If AI buy & spike_prob strong (>=SPIKE_CONF_THRESH) -> strong_buy
-    - If AI buy & spike small -> buy
-    - Similar for sell
-    - Edge conditions for conflicting signals -> hold
-    """
     ai_action = (ai_action or "hold").lower()
-    # treat spike forecast strings: likely_spike, likely_dip, none
     spike_dir = "none"
     if spike_forecast is not None:
         sf = str(spike_forecast).lower()
@@ -256,8 +262,6 @@ def fuse_decision(ai_action, ai_conf, spike_forecast, spike_prob, spike_pct_est)
             spike_dir = "up"
         elif "dip" in sf or "down" in sf or "negative" in sf:
             spike_dir = "down"
-
-    # decide
     if ai_action == "buy":
         if spike_dir == "up" and spike_prob >= SPIKE_CONF_THRESH:
             return "strong_buy"
@@ -266,7 +270,6 @@ def fuse_decision(ai_action, ai_conf, spike_forecast, spike_prob, spike_pct_est)
         if spike_dir == "down" and spike_prob >= SPIKE_CONF_THRESH:
             return "strong_sell"
         return "sell"
-    # If spike alone (AI neutral), convert strong spike -> buy/sell depending direction
     if ai_action == "hold" or ai_action is None:
         if spike_dir == "up" and spike_prob >= SPIKE_CONF_THRESH:
             return "buy"
@@ -279,18 +282,14 @@ def fuse_decision(ai_action, ai_conf, spike_forecast, spike_prob, spike_pct_est)
 # -------------------------------
 def run_cycle():
     logging.info(f"Starting alert cycle {utc_now_iso()}")
-    send_items = []  # collect messages for symbols that require sending (buy/sell)
+    send_items = []
     telemetry_records = {}
-
-    # load global config data for interval & spike window
     INTERVAL = CONF.get("interval", "1h")
-    # interval in hours
     interval_hours = 1 if "h" in INTERVAL else int(''.join(filter(str.isdigit, INTERVAL))) if INTERVAL else 1
     spike_window = int(CONF.get("spike_window", 3))
 
     for sym in SYMBOLS:
         try:
-            # ensure cache (will fetch if missing)
             df = ensure_cache(sym)
             if df is None or df.empty:
                 df = read_cache_csv(sym)
@@ -298,7 +297,10 @@ def run_cycle():
                 logging.warning(f"No data available for {sym}; skipping.")
                 continue
 
-            # AI model load + predict next price
+            # 🔔 Check ±5% daily move (strictly email)
+            check_price_change_and_alert(sym, df, threshold_pct=PRICE_ALERT_PCT)
+
+            # AI + spike logic (unchanged)
             ai_model, ai_model_path = load_ai_model(sym)
             ai_action = "hold"
             ai_confidence = 0.0
@@ -312,16 +314,13 @@ def run_cycle():
                     try:
                         pred = ai_model.predict(X_ai)[0]
                         ai_pred_price = float(pred)
-                        # compute relative confidence as (pred-last)/last scaled to 0..1 (clamped)
                         if last_close and last_close > 0:
                             rel = (ai_pred_price - last_close) / last_close
-                            # convert rel into a pseudo-confidence in [0,1]
-                            ai_confidence = max(0.0, min(1.0, abs(rel) * 5))  # scaling factor - tunable
+                            ai_confidence = max(0.0, min(1.0, abs(rel) * 5))
                             ai_action = "buy" if rel > 0 else "sell" if rel < 0 else "hold"
                     except Exception as e:
                         logging.warning(f"AI prediction failed for {sym}: {e}")
 
-            # Spike predictor
             spike_pack, spike_pack_path = load_spike_pack(sym)
             spike_forecast = None
             spike_prob = 0.0
@@ -336,26 +335,21 @@ def run_cycle():
                         rf_spike = spike_pack.get("spike")
                         if hasattr(rf_spike, "predict_proba"):
                             p = rf_spike.predict_proba(X_spike)[0]
-                            # assume positive class is index 1
                             spike_prob = float(p[1]) if len(p) > 1 else float(p[0])
                         else:
                             spike_prob = float(rf_spike.predict(X_spike)[0])
-                        # decide forecast label
                         if spike_prob >= SPIKE_CONF_THRESH:
                             spike_forecast = "likely_spike"
                         elif spike_prob <= (1 - SPIKE_CONF_THRESH):
                             spike_forecast = "likely_no_spike"
                         else:
                             spike_forecast = "uncertain"
-                        # estimate magnitude (simple heuristic)
                         spike_pct_est = round(spike_prob * ASSUMED_SPIKE_PCT, 2)
                     except Exception as e:
                         logging.warning(f"Spike model predict failed for {sym}: {e}")
 
-            # Fusion
             final_action = fuse_decision(ai_action, ai_confidence, spike_forecast, spike_prob, spike_pct_est)
 
-            # Build telemetry record
             record = {
                 "symbol": sym,
                 "timestamp_utc": utc_now_iso(),
@@ -374,19 +368,11 @@ def run_cycle():
                     "model_path": spike_pack_path
                 },
                 "final_action": final_action,
-                "reason": {
-                    "summary": "",
-                    "details": {}
-                },
-                "sources": {
-                    "ai_model": ai_model_path,
-                    "spike_model": spike_pack_path
-                }
+                "reason": {"summary": "", "details": {}},
+                "sources": {"ai_model": ai_model_path, "spike_model": spike_pack_path}
             }
 
-            # populate reason summary & details (simple explainability)
-            reasons = []
-            details = {}
+            reasons, details = [], {}
             details["ai_rel_diff_pct"] = None
             if last_close and ai_pred_price is not None:
                 rel_pct = (ai_pred_price - last_close) / last_close * 100.0
@@ -405,16 +391,13 @@ def run_cycle():
             telemetry_records[sym] = record
             rotate_and_write_telemetry(sym, record)
 
-            # if final_action is buy or sell (not hold) prepare to send
             if final_action in ("buy", "sell", "strong_buy", "strong_sell"):
                 send_items.append(record)
 
         except Exception as e:
             logging.exception(f"Unhandled error for {sym}: {e}")
 
-    # Prepare unified message (only buy/sell)
     if send_items:
-        # Build a compact markdown message
         header = f"📈 Crypto AI Hybrid Alerts — {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
         parts = []
         for r in send_items:
@@ -432,7 +415,6 @@ def run_cycle():
                 f"{summary}\n"
             )
         body = header + "\n".join(parts)
-        # send telegram
         ok, resp = send_telegram(body)
         if ok:
             logging.info("Telegram alert sent successfully.")
