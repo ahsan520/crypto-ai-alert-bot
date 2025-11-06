@@ -1,27 +1,27 @@
 {
   "symbol": "GALAUSDT",
-  "timestamp_utc": "2025-11-06T15:22:22.874083+00:00",
-  "price": 0.008764123423984,
+  "timestamp_utc": "2025-11-06T15:45:39.458633+00:00",
+  "price": 0.0086072858001333,
   "hybrid_ai_signal": {
     "action": "buy",
-    "confidence": 0.6871,
+    "confidence": 0.7907,
     "predicted_price": 0.009968,
     "model_path": "models/GALAUSDT_model.pkl"
   },
   "spike_signal": {
     "forecast": "likely_no_spike",
-    "probability": 0.185,
-    "expected_change_pct": 0.46,
+    "probability": 0.195,
+    "expected_change_pct": 0.49,
     "duration_hours": 3,
     "model_path": "models/spike_trend/GALAUSDT_spike_pack.pkl"
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +13.74%; SpikeProb=0.18 (est 0.46%) over 3h",
+    "summary": "AI expects +15.81%; SpikeProb=0.2 (est 0.49%) over 3h",
     "details": {
-      "ai_rel_diff_pct": 13.741,
-      "spike_prob": 0.185,
-      "spike_est_pct": 0.46
+      "ai_rel_diff_pct": 15.814,
+      "spike_prob": 0.195,
+      "spike_est_pct": 0.49
     }
   },
   "sources": {
