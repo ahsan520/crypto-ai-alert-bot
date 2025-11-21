@@ -1,27 +1,27 @@
 {
   "symbol": "XRPUSDT",
-  "timestamp_utc": "2025-11-21T09:43:16.768026+00:00",
-  "price": 1.90471,
+  "timestamp_utc": "2025-11-21T10:21:41.982353+00:00",
+  "price": 1.896,
   "hybrid_ai_signal": {
     "action": "buy",
-    "confidence": 0.896,
-    "predicted_price": 2.246033,
+    "confidence": 0.9379,
+    "predicted_price": 2.251668,
     "model_path": "models/XRPUSDT_model.pkl"
   },
   "spike_signal": {
     "forecast": "likely_no_spike",
-    "probability": 0.11,
-    "expected_change_pct": 0.28,
+    "probability": 0.095,
+    "expected_change_pct": 0.24,
     "duration_hours": 3,
     "model_path": "models/spike_trend/XRPUSDT_spike_pack.pkl"
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +17.92%; SpikeProb=0.11 (est 0.28%) over 3h",
+    "summary": "AI expects +18.76%; SpikeProb=0.1 (est 0.24%) over 3h",
     "details": {
-      "ai_rel_diff_pct": 17.92,
-      "spike_prob": 0.11,
-      "spike_est_pct": 0.28
+      "ai_rel_diff_pct": 18.759,
+      "spike_prob": 0.095,
+      "spike_est_pct": 0.24
     }
   },
   "sources": {
