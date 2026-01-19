@@ -1,11 +1,11 @@
 {
   "symbol": "BTCUSDT",
-  "timestamp_utc": "2026-01-19T18:33:58.272565+00:00",
-  "price": 92936.5,
+  "timestamp_utc": "2026-01-19T19:21:08.613421+00:00",
+  "price": 93118.1,
   "hybrid_ai_signal": {
     "action": "buy",
-    "confidence": 0.6966,
-    "predicted_price": 105884.198,
+    "confidence": 0.6854,
+    "predicted_price": 105883.003333,
     "model_path": "models/BTCUSDT_model.pkl"
   },
   "spike_signal": {
@@ -17,9 +17,9 @@
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +13.93%",
+    "summary": "AI expects +13.71%",
     "details": {
-      "ai_rel_diff_pct": 13.932
+      "ai_rel_diff_pct": 13.708
     }
   },
   "sources": {
