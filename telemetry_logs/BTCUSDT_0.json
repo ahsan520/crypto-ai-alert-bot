@@ -1,11 +1,11 @@
 {
   "symbol": "BTCUSDT",
-  "timestamp_utc": "2026-03-24T23:03:49.404945+00:00",
-  "price": 70302.5,
+  "timestamp_utc": "2026-03-24T23:57:29.688652+00:00",
+  "price": 70532.7,
   "hybrid_ai_signal": {
     "action": "buy",
     "confidence": 1.0,
-    "predicted_price": 105883.003333,
+    "predicted_price": 105897.202,
     "model_path": "models/BTCUSDT_model.pkl"
   },
   "spike_signal": {
@@ -17,9 +17,9 @@
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +50.61%; SpikeProb=0.01 (est 0.03%) over 3h",
+    "summary": "AI expects +50.14%; SpikeProb=0.01 (est 0.03%) over 3h",
     "details": {
-      "ai_rel_diff_pct": 50.611,
+      "ai_rel_diff_pct": 50.139,
       "spike_prob": 0.01,
       "spike_est_pct": 0.03
     }
