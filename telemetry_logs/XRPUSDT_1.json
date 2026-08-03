@@ -1,7 +1,7 @@
 {
   "symbol": "XRPUSDT",
-  "timestamp_utc": "2026-08-03T14:36:36.336657+00:00",
-  "price": 1.08189,
+  "timestamp_utc": "2026-08-03T16:27:20.902352+00:00",
+  "price": 1.08356,
   "hybrid_ai_signal": {
     "action": "buy",
     "confidence": 1.0,
@@ -17,9 +17,9 @@
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +108.11%",
+    "summary": "AI expects +107.79%",
     "details": {
-      "ai_rel_diff_pct": 108.114
+      "ai_rel_diff_pct": 107.793
     }
   },
   "sources": {
