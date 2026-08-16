@@ -1,7 +1,7 @@
 {
   "symbol": "GALAUSDT",
-  "timestamp_utc": "2026-08-16T05:29:49.828682+00:00",
-  "price": 0.0016494379456813,
+  "timestamp_utc": "2026-08-16T05:57:04.905418+00:00",
+  "price": 0.0016503036932985,
   "hybrid_ai_signal": {
     "action": "buy",
     "confidence": 1.0,
@@ -17,9 +17,9 @@
   },
   "final_action": "buy",
   "reason": {
-    "summary": "AI expects +504.35%; SpikeProb=0.01 (est 0.01%) over 3h",
+    "summary": "AI expects +504.03%; SpikeProb=0.01 (est 0.01%) over 3h",
     "details": {
-      "ai_rel_diff_pct": 504.352,
+      "ai_rel_diff_pct": 504.035,
       "spike_prob": 0.005,
       "spike_est_pct": 0.01
     }
