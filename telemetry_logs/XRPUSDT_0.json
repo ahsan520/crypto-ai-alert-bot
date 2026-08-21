@@ -1,7 +1,7 @@
 {
   "symbol": "XRPUSDT",
-  "timestamp_utc": "2026-08-21T02:47:11.227704+00:00",
-  "price": 1.29185,
+  "timestamp_utc": "2026-08-21T03:52:36.732761+00:00",
+  "price": 1.31569,
   "hybrid_ai_signal": {
     "action": "buy",
     "confidence": 1.0,
@@ -10,18 +10,18 @@
   },
   "spike_signal": {
     "forecast": "likely_spike",
-    "probability": 0.855,
-    "expected_change_pct": 2.14,
+    "probability": 0.625,
+    "expected_change_pct": 1.56,
     "duration_hours": 3,
     "model_path": "models/spike_trend/XRPUSDT_spike_pack.pkl"
   },
   "final_action": "strong_buy",
   "reason": {
-    "summary": "AI expects +73.86%; SpikeProb=0.85 (est 2.14%) over 3h",
+    "summary": "AI expects +70.71%; SpikeProb=0.62 (est 1.56%) over 3h",
     "details": {
-      "ai_rel_diff_pct": 73.862,
-      "spike_prob": 0.855,
-      "spike_est_pct": 2.14
+      "ai_rel_diff_pct": 70.711,
+      "spike_prob": 0.625,
+      "spike_est_pct": 1.56
     }
   },
   "sources": {
